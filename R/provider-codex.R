@@ -195,7 +195,12 @@ codex_stream_turn <- function(
 
       if (!is.null(msg$id) && !is.null(msg$method)) {
         codex_maybe_emit_event(provider, msg, emit_events = emit_events)
-        codex_handle_server_request(provider, msg, tools = tools)
+        codex_handle_server_request(
+          provider,
+          msg,
+          tools = tools,
+          emit_tools = emit_events
+        )
         next
       }
 
@@ -203,6 +208,7 @@ codex_stream_turn <- function(
         next
       }
 
+      codex_track_command_output(provider, msg)
       codex_maybe_emit_event(provider, msg, emit_events = emit_events)
 
       if (identical(msg$method, "item/agentMessage/delta")) {
@@ -293,6 +299,8 @@ codex_run_turn <- function(
       next
     }
 
+    codex_track_command_output(provider, msg)
+
     if (identical(msg$method, "item/agentMessage/delta")) {
       delta <- msg$params$delta %||% ""
       deltas <- c(deltas, delta)
@@ -365,7 +373,10 @@ codex_ensure_initialized <- function(provider) {
     runtime$process <- processx::process$new(
       command = codex_bin,
       args = c("app-server"),
-      env = c(CODEX_HOME = codex_home_dir()),
+      env = c(
+        CODEX_HOME = codex_home_dir(),
+        PATH = Sys.getenv("PATH", unset = "")
+      ),
       stdin = "|",
       stdout = "|",
       stderr = "|",
@@ -377,6 +388,7 @@ codex_ensure_initialized <- function(provider) {
     runtime$output_buffer <- ""
     runtime$output_lines <- character()
     runtime$stderr_lines <- character()
+    runtime$command_output <- list()
     runtime$tools_signature <- NULL
     runtime$next_request_id <- 1
   }
@@ -459,7 +471,12 @@ codex_wait_response <- function(provider, request_id, tools = NULL) {
   }
 }
 
-codex_handle_server_request <- function(provider, msg, tools = NULL) {
+codex_handle_server_request <- function(
+  provider,
+  msg,
+  tools = NULL,
+  emit_tools = FALSE
+) {
   method <- msg$method %||% ""
   if (identical(method, "item/commandExecution/requestApproval")) {
     codex_write_message(
@@ -478,7 +495,12 @@ codex_handle_server_request <- function(provider, msg, tools = NULL) {
       )
     )
   } else if (identical(method, "item/tool/call")) {
-    result <- codex_tool_call(provider, msg$params, tools = tools)
+    result <- codex_tool_call(
+      provider,
+      msg$params,
+      tools = tools,
+      emit_tools = emit_tools
+    )
     codex_write_message(
       provider,
       list(
@@ -559,6 +581,7 @@ codex_runtime_new <- function() {
   runtime$output_buffer <- ""
   runtime$output_lines <- character()
   runtime$stderr_lines <- character()
+  runtime$command_output <- list()
   runtime$codex_home <- codex_home_dir()
   runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
@@ -603,6 +626,7 @@ codex_runtime_stop <- function(runtime) {
   runtime$output_buffer <- ""
   runtime$output_lines <- character()
   runtime$stderr_lines <- character()
+  runtime$command_output <- list()
   runtime$tools_signature <- NULL
   invisible()
 }
@@ -652,7 +676,9 @@ codex_maybe_emit_event <- function(provider, msg, emit_events = FALSE) {
 
   line <- codex_event_line(provider, msg)
   if (!is.null(line)) {
-    message(line)
+    flush.console()
+    cat_line(line)
+    flush.console()
   }
   invisible()
 }
@@ -672,13 +698,9 @@ codex_event_line <- function(provider, msg) {
   if (identical(method, "turn/completed")) {
     status <- msg$params$turn$status %||% "unknown"
     if (identical(status, "completed")) {
-      return("[codex] done")
+      return(NULL)
     }
     return(paste0("[codex] turn ", status))
-  }
-  if (identical(method, "item/tool/call")) {
-    tool <- msg$params$tool %||% "unknown"
-    return(paste0("[codex] tool: ", tool))
   }
   if (identical(method, "item/commandExecution/requestApproval")) {
     return("[codex] approval requested: command")
@@ -707,8 +729,14 @@ codex_event_line <- function(provider, msg) {
     if (identical(type, "commandExecution")) {
       status <- item$status %||% "completed"
       if (!identical(status, "completed")) {
+        reason <- codex_command_failure_reason(provider, item)
+        codex_clear_command_output(provider, item$id %||% "")
+        if (!is.null(reason)) {
+          return(paste0("[codex] command ", status, ": ", reason))
+        }
         return(paste0("[codex] command ", status))
       }
+      codex_clear_command_output(provider, item$id %||% "")
       return(NULL)
     }
     if (identical(type, "fileChange")) {
@@ -754,6 +782,62 @@ codex_command_summary <- function(item) {
   } else {
     summary
   }
+}
+
+codex_track_command_output <- function(provider, msg) {
+  if (!identical(msg$method %||% "", "item/commandExecution/outputDelta")) {
+    return(invisible())
+  }
+
+  runtime <- provider@runtime
+  item_id <- msg$params$itemId %||% msg$params$item$id %||% ""
+  if (!nzchar(item_id)) {
+    return(invisible())
+  }
+
+  delta <- msg$params$delta %||% msg$params$outputDelta %||% ""
+  if (!nzchar(delta)) {
+    return(invisible())
+  }
+
+  existing <- runtime$command_output[[item_id]] %||% ""
+  combined <- paste0(existing, delta)
+  if (nchar(combined) > 5000) {
+    combined <- substr(combined, nchar(combined) - 4999, nchar(combined))
+  }
+  runtime$command_output[[item_id]] <- combined
+  invisible()
+}
+
+codex_command_failure_reason <- function(provider, item) {
+  text <- item$aggregatedOutput %||%
+    provider@runtime$command_output[[item$id %||% ""]] %||%
+    ""
+  if (!nzchar(text)) {
+    return(NULL)
+  }
+
+  lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
+  lines <- trimws(lines)
+  lines <- lines[nzchar(lines)]
+  if (length(lines) == 0) {
+    return(NULL)
+  }
+
+  reason <- lines[[length(lines)]]
+  if (nchar(reason) > 120) {
+    reason <- paste0(substr(reason, 1, 117), "...")
+  }
+  reason
+}
+
+codex_clear_command_output <- function(provider, item_id) {
+  if (!nzchar(item_id)) {
+    return(invisible())
+  }
+
+  provider@runtime$command_output[[item_id]] <- NULL
+  invisible()
 }
 
 codex_shutdown_all_runtimes <- function() {
@@ -811,7 +895,12 @@ codex_assert_tools_locked <- function(provider, tools = NULL) {
   invisible()
 }
 
-codex_tool_call <- function(provider, params, tools = NULL) {
+codex_tool_call <- function(
+  provider,
+  params,
+  tools = NULL,
+  emit_tools = FALSE
+) {
   tool_name <- params$tool %||% ""
   tool <- tools[[tool_name]]
   request <- ContentToolRequest(
@@ -821,7 +910,15 @@ codex_tool_call <- function(provider, params, tools = NULL) {
     tool = tool
   )
 
+  if (emit_tools) {
+    maybe_echo_tool(request, echo = "output")
+  }
+
   result <- invoke_tool(request)
+  if (emit_tools) {
+    maybe_echo_tool(result, echo = "output")
+  }
+
   if (tool_errored(result)) {
     return(list(
       contentItems = list(list(

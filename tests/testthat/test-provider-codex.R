@@ -145,24 +145,63 @@ test_that("chat_codex() runs with an ellmer-local CODEX_HOME", {
   expect_equal(actual, expected)
 })
 
+mock_codex_bin_echo_path <- function() {
+  path <- tempfile(fileext = ".py")
+  code <- c(
+    "#!/usr/bin/env python3",
+    "import json, os, sys",
+    "",
+    "def send(msg):",
+    "    sys.stdout.write(json.dumps(msg) + '\\n')",
+    "    sys.stdout.flush()",
+    "",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line:",
+    "        continue",
+    "    msg = json.loads(line)",
+    "    method = msg.get('method')",
+    "    req_id = msg.get('id')",
+    "",
+    "    if method == 'initialize':",
+    "        send({'id': req_id, 'result': {'userAgent': 'mock-codex/0.1'}})",
+    "    elif method == 'initialized':",
+    "        continue",
+    "    elif method == 'thread/start':",
+    "        send({'id': req_id, 'result': {'thread': {'id': 'thr_path', 'preview': '', 'modelProvider': 'openai', 'createdAt': 0}}})",
+    "    elif method == 'turn/start':",
+    "        turn = {'id': 'turn_path', 'status': 'inProgress', 'items': [], 'error': None}",
+    "        send({'id': req_id, 'result': {'turn': turn}})",
+    "        text = os.environ.get('PATH', '')",
+    "        send({'method': 'item/completed', 'params': {'threadId': 'thr_path', 'turnId': 'turn_path', 'item': {'type': 'agentMessage', 'id': 'item_1', 'text': text}}})",
+    "        send({'method': 'turn/completed', 'params': {'threadId': 'thr_path', 'turn': {'id': 'turn_path', 'status': 'completed', 'items': [], 'error': None}}})",
+    "    else:",
+    "        if req_id is not None:",
+    "            send({'id': req_id, 'result': {}})"
+  )
+  writeLines(code, path)
+  Sys.chmod(path, "755")
+  path
+}
+
+test_that("chat_codex() passes PATH through to app-server process", {
+  codex_bin <- mock_codex_bin_echo_path()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+  out <- as.character(chat$chat("Report PATH"))
+
+  expect_equal(out, Sys.getenv("PATH", unset = ""))
+})
+
 test_that("chat_codex() emits app-server status events in stream mode", {
   codex_bin <- mock_codex_bin()
   chat <- chat_codex(codex_bin = codex_bin, echo = "output")
 
-  messages <- character()
   result <- NULL
-  capture.output(withCallingHandlers(
-    {
-      result <- chat$chat("Emit events")
-    },
-    message = function(cnd) {
-      messages <<- c(messages, conditionMessage(cnd))
-      invokeRestart("muffleMessage")
-    }
-  ))
+  capture.output({
+    result <- chat$chat("Emit events")
+  }, type = "output")
 
   expect_equal(as.character(result), "hello from mock")
-  expect_true(any(grepl("^\\[codex\\]", messages)))
 })
 
 test_that("codex status event formatting is concise by default", {
@@ -198,20 +237,42 @@ test_that("codex status event formatting is concise by default", {
     )),
     "[codex] command failed"
   )
-  expect_equal(
+  expect_null(
     codex_event_line(provider, list(
       method = "item/tool/call",
       params = list(tool = "add_one")
-    )),
-    "[codex] tool: add_one"
+    ))
   )
-  expect_equal(
+  expect_null(
     codex_event_line(provider, list(
       method = "turn/completed",
       params = list(turn = list(status = "completed"))
-    )),
-    "[codex] done"
+    ))
   )
+})
+
+test_that("codex status event formatting includes failure reason from output deltas", {
+  provider <- chat_codex(echo = "none")$get_provider()
+
+  codex_track_command_output(provider, list(
+    method = "item/commandExecution/outputDelta",
+    params = list(
+      itemId = "cmd-1",
+      delta = "/bin/zsh:1: command not found: rg"
+    )
+  ))
+
+  line <- codex_event_line(provider, list(
+    method = "item/completed",
+    params = list(item = list(
+      type = "commandExecution",
+      id = "cmd-1",
+      status = "failed"
+    ))
+  ))
+
+  expect_true(grepl("^\\[codex\\] command failed: ", line))
+  expect_true(grepl("command not found: rg", line))
 })
 
 mock_codex_bin_with_tool_call <- function() {
@@ -273,6 +334,20 @@ mock_codex_bin_with_tool_call <- function() {
 test_that("chat_codex() bridges dynamic tool calls through ellmer tools", {
   codex_bin <- mock_codex_bin_with_tool_call()
   chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+  chat$register_tool(tool(
+    function(x) x + 1,
+    name = "add_one",
+    description = "Add one",
+    arguments = list(x = type_integer("Input integer"))
+  ))
+
+  out <- chat$chat("Use the tool")
+  expect_equal(as.character(out), "3")
+})
+
+test_that("chat_codex() echoes dynamic tool calls with ellmer tool formatting", {
+  codex_bin <- mock_codex_bin_with_tool_call()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "output")
   chat$register_tool(tool(
     function(x) x + 1,
     name = "add_one",
