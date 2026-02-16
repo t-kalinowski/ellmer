@@ -284,6 +284,16 @@ test_that("codex status event formatting is concise by default", {
   )
   expect_equal(
     codex_event_line(provider, list(
+      method = "item/started",
+      params = list(item = list(
+        type = "commandExecution",
+        command = "/bin/zsh -lc \"sed -n '1,220p' DESCRIPTION\""
+      ))
+    )),
+    "( ) [tool call] shell(command = \"sed -n '1,220p' DESCRIPTION\")"
+  )
+  expect_equal(
+    codex_event_line(provider, list(
       method = "item/completed",
       params = list(item = list(type = "commandExecution", status = "failed"))
     )),

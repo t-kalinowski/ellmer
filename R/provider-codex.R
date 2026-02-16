@@ -793,15 +793,26 @@ codex_command_summary <- function(item) {
     return("<command>")
   }
 
-  head <- basename(cmd[[1]])
-  if (
-    length(cmd) >= 3 &&
-      identical(cmd[[2]], "-lc") &&
-      head %in% c("sh", "bash", "zsh")
-  ) {
-    summary <- cmd[[3]]
+  if (length(cmd) == 1) {
+    summary <- trimws(as.character(cmd[[1]]))
+    shell_prefix <- "^(.*/)?(sh|bash|zsh)\\s+-lc\\s+"
+    if (grepl(shell_prefix, summary, perl = TRUE)) {
+      summary <- sub(shell_prefix, "", summary, perl = TRUE)
+      summary <- sub("^(['\"])(.*)\\1$", "\\2", summary, perl = TRUE)
+      summary <- gsub("\\\\\"", "\"", summary)
+      summary <- gsub("\\\\'", "'", summary)
+    }
   } else {
-    summary <- paste(cmd, collapse = " ")
+    head <- basename(cmd[[1]])
+    if (
+      length(cmd) >= 3 &&
+        identical(cmd[[2]], "-lc") &&
+        head %in% c("sh", "bash", "zsh")
+    ) {
+      summary <- cmd[[3]]
+    } else {
+      summary <- paste(cmd, collapse = " ")
+    }
   }
 
   summary <- trimws(gsub("[[:space:]]+", " ", summary))
