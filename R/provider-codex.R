@@ -727,14 +727,17 @@ codex_event_line <- function(provider, msg) {
     item <- msg$params$item %||% list()
     type <- item$type %||% "item"
     if (identical(type, "commandExecution")) {
-      return(paste0("[codex] running: ", codex_command_summary(item)))
+      return(codex_builtin_tool_call_line(
+        "shell",
+        command = codex_command_summary(item)
+      ))
     }
     if (identical(type, "fileChange")) {
-      return("[codex] file changes proposed")
+      return(codex_builtin_tool_call_line("apply_patch"))
     }
     if (identical(type, "mcpToolCall")) {
       tool <- item$tool %||% "tool"
-      return(paste0("[codex] app tool: ", tool))
+      return(codex_builtin_tool_call_line(tool))
     }
     return(NULL)
   }
@@ -746,10 +749,11 @@ codex_event_line <- function(provider, msg) {
       if (!identical(status, "completed")) {
         reason <- codex_command_failure_reason(provider, item)
         codex_clear_command_output(provider, item$id %||% "")
-        if (!is.null(reason)) {
-          return(paste0("[codex] command ", status, ": ", reason))
-        }
-        return(paste0("[codex] command ", status))
+        return(codex_builtin_tool_result_line(
+          status = status,
+          reason = reason,
+          noun = "command"
+        ))
       }
       codex_clear_command_output(provider, item$id %||% "")
       return(NULL)
@@ -757,14 +761,23 @@ codex_event_line <- function(provider, msg) {
     if (identical(type, "fileChange")) {
       status <- item$status %||% "completed"
       if (!identical(status, "completed")) {
-        return(paste0("[codex] file changes ", status))
+        return(codex_builtin_tool_result_line(
+          status = status,
+          reason = NULL,
+          noun = "file change"
+        ))
       }
       return(NULL)
     }
     if (identical(type, "mcpToolCall")) {
       status <- item$status %||% "completed"
       if (!identical(status, "completed")) {
-        return(paste0("[codex] app tool ", status))
+        reason <- item$error %||% NULL
+        return(codex_builtin_tool_result_line(
+          status = status,
+          reason = reason,
+          noun = "app tool"
+        ))
       }
       return(NULL)
     }
@@ -797,6 +810,28 @@ codex_command_summary <- function(item) {
   } else {
     summary
   }
+}
+
+codex_builtin_tool_call_line <- function(name, ...) {
+  args <- list(...)
+  if (length(args) == 0) {
+    return(paste0("( ) [tool call] ", name, "()"))
+  }
+
+  pairs <- mapply(function(key, value) {
+    value_txt <- encodeString(as.character(value %||% ""), quote = "\"")
+    paste0(key, " = ", value_txt)
+  }, names(args), args, USE.NAMES = FALSE)
+  paste0("( ) [tool call] ", name, "(", paste(pairs, collapse = ", "), ")")
+}
+
+codex_builtin_tool_result_line <- function(status, reason = NULL, noun = "tool") {
+  prefix <- if (identical(status, "failed")) "x #> Error: " else "x #> "
+  detail <- reason %||% paste(noun, status)
+  if (!identical(status, "failed")) {
+    detail <- paste(noun, status)
+  }
+  paste0(prefix, detail)
 }
 
 codex_track_command_output <- function(provider, msg) {

@@ -251,9 +251,9 @@ test_that("chat_codex() emits app-server status events in stream mode", {
   }, type = "output")
 
   expect_equal(as.character(result), "hello from mock")
-  expect_true(any(grepl("^\\[codex\\]", messages)))
-  expect_true(any(grepl("running:", messages)))
-  expect_false(any(grepl("^\\[codex\\]", output)))
+  expect_true(any(grepl("\\[tool call\\]", messages)))
+  expect_true(any(grepl("shell\\(", messages)))
+  expect_false(any(grepl("\\[tool call\\]", output)))
 })
 
 test_that("codex status event formatting is concise by default", {
@@ -280,14 +280,14 @@ test_that("codex status event formatting is concise by default", {
         command = list("/bin/zsh", "-lc", "ls -la && echo done")
       ))
     )),
-    "[codex] running: ls -la && echo done"
+    "( ) [tool call] shell(command = \"ls -la && echo done\")"
   )
   expect_equal(
     codex_event_line(provider, list(
       method = "item/completed",
       params = list(item = list(type = "commandExecution", status = "failed"))
     )),
-    "[codex] command failed"
+    "x #> Error: command failed"
   )
   expect_null(
     codex_event_line(provider, list(
@@ -323,7 +323,7 @@ test_that("codex status event formatting includes failure reason from output del
     ))
   ))
 
-  expect_true(grepl("^\\[codex\\] command failed: ", line))
+  expect_true(grepl("^x #> Error: ", line))
   expect_true(grepl("command not found: rg", line))
 })
 
