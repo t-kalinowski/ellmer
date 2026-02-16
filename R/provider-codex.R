@@ -54,6 +54,12 @@ ProviderCodex <- new_class(
   )
 )
 
+.codex_runtime_registry <- local({
+  x <- new.env(parent = emptyenv())
+  x$runtimes <- new.env(parent = emptyenv())
+  x
+})
+
 method(chat_perform_provider, ProviderCodex) <- function(
   provider,
   mode = c("value", "stream", "async-stream", "async-value"),
@@ -381,6 +387,11 @@ codex_read_message <- function(provider, timeout_ms = 10000) {
 
 codex_runtime_new <- function() {
   runtime <- new.env(parent = emptyenv())
+  runtime$id <- paste0(
+    format(Sys.time(), "%Y%m%d%H%M%S"),
+    "-",
+    as.integer(stats::runif(1, 1, 1e9))
+  )
   runtime$process <- NULL
   runtime$initialized <- FALSE
   runtime$thread_id <- NULL
@@ -388,7 +399,51 @@ codex_runtime_new <- function() {
   runtime$output_lines <- character()
   runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
+  codex_register_runtime(runtime)
+  reg.finalizer(runtime, function(x) {
+    codex_runtime_stop(x)
+    codex_unregister_runtime(x)
+  }, onexit = TRUE)
   runtime
+}
+
+codex_register_runtime <- function(runtime) {
+  .codex_runtime_registry$runtimes[[runtime$id]] <- runtime
+  invisible()
+}
+
+codex_unregister_runtime <- function(runtime) {
+  id <- runtime$id %||% NULL
+  if (!is.null(id) && exists(id, envir = .codex_runtime_registry$runtimes, inherits = FALSE)) {
+    rm(list = id, envir = .codex_runtime_registry$runtimes)
+  }
+  invisible()
+}
+
+codex_runtime_stop <- function(runtime) {
+  proc <- runtime$process %||% NULL
+  if (is.null(proc)) {
+    return(invisible())
+  }
+  if (proc$is_alive()) {
+    try(proc$kill(), silent = TRUE)
+  }
+  runtime$initialized <- FALSE
+  runtime$thread_id <- NULL
+  runtime$output_buffer <- ""
+  runtime$output_lines <- character()
+  runtime$tools_signature <- NULL
+  invisible()
+}
+
+codex_shutdown_all_runtimes <- function() {
+  ids <- ls(envir = .codex_runtime_registry$runtimes, all.names = TRUE)
+  for (id in ids) {
+    runtime <- .codex_runtime_registry$runtimes[[id]]
+    codex_runtime_stop(runtime)
+    codex_unregister_runtime(runtime)
+  }
+  invisible()
 }
 
 codex_dynamic_tools <- function(provider, tools = NULL) {

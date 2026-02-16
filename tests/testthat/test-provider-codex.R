@@ -250,3 +250,48 @@ test_that("chat_codex() fails fast for unsupported async, batch, and parallel AP
     class = "ellmer_codex_parallel_not_supported"
   )
 })
+
+test_that("codex runtime cleanup stops child processes", {
+  runtime <- codex_runtime_new()
+  runtime$process <- processx::process$new(
+    command = file.path(R.home("bin"), "Rscript"),
+    args = c("-e", "Sys.sleep(30)"),
+    stdin = "|",
+    stdout = "|",
+    stderr = "|",
+    cleanup = FALSE
+  )
+  expect_true(runtime$process$is_alive())
+
+  codex_runtime_stop(runtime)
+  Sys.sleep(0.1)
+  expect_false(runtime$process$is_alive())
+})
+
+test_that("global codex cleanup stops all tracked runtimes", {
+  runtime1 <- codex_runtime_new()
+  runtime2 <- codex_runtime_new()
+  runtime1$process <- processx::process$new(
+    command = file.path(R.home("bin"), "Rscript"),
+    args = c("-e", "Sys.sleep(30)"),
+    stdin = "|",
+    stdout = "|",
+    stderr = "|",
+    cleanup = FALSE
+  )
+  runtime2$process <- processx::process$new(
+    command = file.path(R.home("bin"), "Rscript"),
+    args = c("-e", "Sys.sleep(30)"),
+    stdin = "|",
+    stdout = "|",
+    stderr = "|",
+    cleanup = FALSE
+  )
+  expect_true(runtime1$process$is_alive())
+  expect_true(runtime2$process$is_alive())
+
+  codex_shutdown_all_runtimes()
+  Sys.sleep(0.1)
+  expect_false(runtime1$process$is_alive())
+  expect_false(runtime2$process$is_alive())
+})

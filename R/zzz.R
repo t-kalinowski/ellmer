@@ -3,6 +3,12 @@
   S7::methods_register()
 }
 
+.onUnload <- function(libpath) {
+  if (exists("codex_shutdown_all_runtimes", mode = "function", inherits = TRUE)) {
+    codex_shutdown_all_runtimes()
+  }
+}
+
 # Work around S7 bug
 rm(format)
 rm(print)
