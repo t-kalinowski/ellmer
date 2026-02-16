@@ -360,8 +360,9 @@ codex_ensure_initialized <- function(provider) {
       return(invisible())
     }
   } else {
+    codex_bin <- codex_resolve_bin(provider@codex_bin)
     runtime$process <- processx::process$new(
-      command = provider@codex_bin,
+      command = codex_bin,
       args = c("app-server"),
       env = c(CODEX_HOME = codex_home_dir()),
       stdin = "|",
@@ -395,6 +396,29 @@ codex_ensure_initialized <- function(provider) {
   codex_send_notification(provider, "initialized", list())
   runtime$initialized <- TRUE
   invisible()
+}
+
+codex_resolve_bin <- function(codex_bin) {
+  if (grepl("[/\\\\]", codex_bin) || startsWith(codex_bin, "~")) {
+    path <- path.expand(codex_bin)
+    if (file.exists(path)) {
+      return(path)
+    }
+  } else {
+    path <- Sys.which(codex_bin)
+    if (nzchar(path)) {
+      return(path)
+    }
+  }
+
+  cli::cli_abort(
+    c(
+      "Could not find Codex CLI binary {.file {codex_bin}}.",
+      "i" = "Install Codex CLI and ensure {.code Sys.which('codex')} returns a path.",
+      "i" = "Or pass an explicit binary path with {.code chat_codex(codex_bin = '/full/path/to/codex')}."
+    ),
+    class = "ellmer_codex_binary_not_found"
+  )
 }
 
 codex_send_notification <- function(provider, method, params = list()) {

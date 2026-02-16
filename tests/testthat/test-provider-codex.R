@@ -8,6 +8,15 @@ test_that("chat_codex() creates a chat with a codex provider", {
   expect_equal(provider@codex_bin, "codex")
 })
 
+test_that("chat_codex() errors clearly when codex binary is missing", {
+  chat <- chat_codex(codex_bin = tempfile("missing-codex-"), echo = "none")
+
+  expect_error(
+    chat$chat("hello"),
+    class = "ellmer_codex_binary_not_found"
+  )
+})
+
 mock_codex_bin <- function() {
   path <- tempfile(fileext = ".py")
   code <- c(
