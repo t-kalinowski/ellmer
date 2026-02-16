@@ -130,6 +130,45 @@ mock_codex_bin_echo_env <- function() {
   path
 }
 
+mock_codex_bin_with_command_event <- function() {
+  path <- tempfile(fileext = ".py")
+  code <- c(
+    "#!/usr/bin/env python3",
+    "import json, sys",
+    "",
+    "def send(msg):",
+    "    sys.stdout.write(json.dumps(msg) + '\\n')",
+    "    sys.stdout.flush()",
+    "",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line:",
+    "        continue",
+    "    msg = json.loads(line)",
+    "    method = msg.get('method')",
+    "    req_id = msg.get('id')",
+    "",
+    "    if method == 'initialize':",
+    "        send({'id': req_id, 'result': {'userAgent': 'mock-codex/0.1'}})",
+    "    elif method == 'initialized':",
+    "        continue",
+    "    elif method == 'thread/start':",
+    "        send({'id': req_id, 'result': {'thread': {'id': 'thr_evt', 'preview': '', 'modelProvider': 'openai', 'createdAt': 0}}})",
+    "    elif method == 'turn/start':",
+    "        turn = {'id': 'turn_evt', 'status': 'inProgress', 'items': [], 'error': None}",
+    "        send({'id': req_id, 'result': {'turn': turn}})",
+    "        send({'method': 'item/started', 'params': {'threadId': 'thr_evt', 'turnId': 'turn_evt', 'item': {'type': 'commandExecution', 'id': 'cmd_1', 'status': 'inProgress', 'command': ['/bin/zsh', '-lc', 'pwd']}}})",
+    "        send({'method': 'item/completed', 'params': {'threadId': 'thr_evt', 'turnId': 'turn_evt', 'item': {'type': 'agentMessage', 'id': 'item_1', 'text': 'hello from mock'}}})",
+    "        send({'method': 'turn/completed', 'params': {'threadId': 'thr_evt', 'turn': {'id': 'turn_evt', 'status': 'completed', 'items': [], 'error': None}}})",
+    "    else:",
+    "        if req_id is not None:",
+    "            send({'id': req_id, 'result': {}})"
+  )
+  writeLines(code, path)
+  Sys.chmod(path, "755")
+  path
+}
+
 test_that("chat_codex() runs with an ellmer-local CODEX_HOME", {
   codex_bin <- mock_codex_bin_echo_env()
   chat <- chat_codex(codex_bin = codex_bin, echo = "none")
@@ -193,15 +232,28 @@ test_that("chat_codex() passes PATH through to app-server process", {
 })
 
 test_that("chat_codex() emits app-server status events in stream mode", {
-  codex_bin <- mock_codex_bin()
+  codex_bin <- mock_codex_bin_with_command_event()
   chat <- chat_codex(codex_bin = codex_bin, echo = "output")
 
+  messages <- character()
   result <- NULL
-  capture.output({
-    result <- chat$chat("Emit events")
+  capture.output(withCallingHandlers(
+    {
+      result <- chat$chat("Emit events")
+    },
+    message = function(cnd) {
+      messages <<- c(messages, conditionMessage(cnd))
+      invokeRestart("muffleMessage")
+    }
+  ), type = "output")
+  output <- capture.output({
+    result <- chat$chat("Emit events again")
   }, type = "output")
 
   expect_equal(as.character(result), "hello from mock")
+  expect_true(any(grepl("^\\[codex\\]", messages)))
+  expect_true(any(grepl("running:", messages)))
+  expect_false(any(grepl("^\\[codex\\]", output)))
 })
 
 test_that("codex status event formatting is concise by default", {

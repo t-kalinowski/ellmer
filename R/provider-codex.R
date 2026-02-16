@@ -109,7 +109,16 @@ method(chat_response_duration, ProviderCodex) <- function(provider, response) {
 }
 
 method(stream_content, ProviderCodex) <- function(provider, event) {
-  if (is.null(event) || !identical(event$type, "item/agentMessage/delta")) {
+  if (is.null(event)) {
+    return(NULL)
+  }
+  if (identical(event$type, "turn/completed")) {
+    return(ContentText(event$result$text %||% ""))
+  }
+  if (!identical(event$type, "item/agentMessage/delta")) {
+    return(NULL)
+  }
+  if (identical(provider@events, "status")) {
     return(NULL)
   }
   ContentText(event$delta)
@@ -676,10 +685,16 @@ codex_maybe_emit_event <- function(provider, msg, emit_events = FALSE) {
 
   line <- codex_event_line(provider, msg)
   if (!is.null(line)) {
-    flush.console()
-    cat_line(line)
-    flush.console()
+    codex_emit_status_line(line)
   }
+  invisible()
+}
+
+codex_emit_status_line <- function(line) {
+  flush.console()
+  message(line)
+  try(flush(stderr()), silent = TRUE)
+  flush.console()
   invisible()
 }
 
