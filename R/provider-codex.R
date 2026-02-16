@@ -223,6 +223,7 @@ codex_ensure_thread <- function(provider, tools = NULL) {
   codex_ensure_initialized(provider)
   runtime <- provider@runtime
   if (!is.null(runtime$thread_id)) {
+    codex_assert_tools_locked(provider, tools = tools)
     return(invisible())
   }
 
@@ -235,6 +236,7 @@ codex_ensure_thread <- function(provider, tools = NULL) {
   request_id <- codex_send_request(provider, "thread/start", start_params)
   response <- codex_wait_response(provider, request_id)
   runtime$thread_id <- response$result$thread$id
+  runtime$tools_signature <- codex_tools_signature(provider, tools = tools)
   invisible()
 }
 
@@ -257,6 +259,7 @@ codex_ensure_initialized <- function(provider) {
     runtime$thread_id <- NULL
     runtime$output_buffer <- ""
     runtime$output_lines <- character()
+    runtime$tools_signature <- NULL
     runtime$next_request_id <- 1
   }
 
@@ -383,6 +386,7 @@ codex_runtime_new <- function() {
   runtime$thread_id <- NULL
   runtime$output_buffer <- ""
   runtime$output_lines <- character()
+  runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
   runtime
 }
@@ -404,6 +408,32 @@ codex_dynamic_tools <- function(provider, tools = NULL) {
   })
 
   unname(specs[!map_lgl(specs, is.null)])
+}
+
+codex_tools_signature <- function(provider, tools = NULL) {
+  specs <- codex_dynamic_tools(provider, tools = tools)
+  unclass(jsonlite::toJSON(specs, auto_unbox = TRUE, null = "null"))
+}
+
+codex_assert_tools_locked <- function(provider, tools = NULL) {
+  runtime <- provider@runtime
+  current <- codex_tools_signature(provider, tools = tools)
+
+  if (is.null(runtime$tools_signature)) {
+    runtime$tools_signature <- current
+    return(invisible())
+  }
+  if (!identical(current, runtime$tools_signature)) {
+    cli::cli_abort(
+      paste0(
+        "{.fn chat_codex} does not support changing tools after thread ",
+        "start. Create a new chat for a different tool set."
+      ),
+      class = "ellmer_codex_tool_set_locked"
+    )
+  }
+
+  invisible()
 }
 
 codex_tool_call <- function(provider, params, tools = NULL) {

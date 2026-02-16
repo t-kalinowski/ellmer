@@ -182,3 +182,28 @@ test_that("chat_codex() supports structured output via outputSchema", {
 
   expect_equal(out$answer, "ok")
 })
+
+test_that("chat_codex() locks tool set after first thread start", {
+  codex_bin <- mock_codex_bin()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+  chat$register_tool(tool(
+    function(x) x + 1,
+    name = "add_one",
+    description = "Add one",
+    arguments = list(x = type_integer("Input integer"))
+  ))
+
+  chat$chat("First turn")
+
+  chat$register_tool(tool(
+    function(x) x * 2,
+    name = "times_two",
+    description = "Multiply by two",
+    arguments = list(x = type_integer("Input integer"))
+  ))
+
+  expect_error(
+    chat$chat("Second turn"),
+    class = "ellmer_codex_tool_set_locked"
+  )
+})
