@@ -76,7 +76,7 @@ method(chat_perform_provider, ProviderCodex) <- function(
   }
 
   input <- codex_turn_input(turns[[length(turns)]])
-  result <- codex_run_turn(provider, input)
+  result <- codex_run_turn(provider, input, tools = tools)
 
   if (mode == "value") {
     result
@@ -133,8 +133,8 @@ codex_turn_input <- function(turn) {
   })
 }
 
-codex_run_turn <- function(provider, input) {
-  codex_ensure_thread(provider)
+codex_run_turn <- function(provider, input, tools = NULL) {
+  codex_ensure_thread(provider, tools = tools)
   runtime <- provider@runtime
   start <- Sys.time()
 
@@ -156,7 +156,7 @@ codex_run_turn <- function(provider, input) {
     }
 
     if (!is.null(msg$id) && !is.null(msg$method)) {
-      codex_handle_server_request(provider, msg)
+      codex_handle_server_request(provider, msg, tools = tools)
       next
     }
 
@@ -203,16 +203,20 @@ codex_run_turn <- function(provider, input) {
   )
 }
 
-codex_ensure_thread <- function(provider) {
+codex_ensure_thread <- function(provider, tools = NULL) {
   codex_ensure_initialized(provider)
   runtime <- provider@runtime
   if (!is.null(runtime$thread_id)) {
     return(invisible())
   }
 
-  request_id <- codex_send_request(provider, "thread/start", list(
-    model = provider@model
-  ))
+  start_params <- list(model = provider@model)
+  dynamic_tools <- codex_dynamic_tools(provider, tools)
+  if (length(dynamic_tools) > 0) {
+    start_params$dynamicTools <- dynamic_tools
+  }
+
+  request_id <- codex_send_request(provider, "thread/start", start_params)
   response <- codex_wait_response(provider, request_id)
   runtime$thread_id <- response$result$thread$id
   invisible()
@@ -245,7 +249,8 @@ codex_ensure_initialized <- function(provider) {
       name = "r_ellmer",
       title = "ellmer",
       version = as.character(utils::packageVersion("ellmer"))
-    )
+    ),
+    capabilities = list(experimentalApi = TRUE)
   ))
   codex_wait_response(provider, request_id)
   codex_send_notification(provider, "initialized", list())
@@ -269,12 +274,12 @@ codex_send_request <- function(provider, method, params = list()) {
   request_id
 }
 
-codex_wait_response <- function(provider, request_id) {
+codex_wait_response <- function(provider, request_id, tools = NULL) {
   repeat {
     msg <- codex_read_message(provider)
 
     if (!is.null(msg$id) && !is.null(msg$method)) {
-      codex_handle_server_request(provider, msg)
+      codex_handle_server_request(provider, msg, tools = tools)
       next
     }
 
@@ -287,7 +292,7 @@ codex_wait_response <- function(provider, request_id) {
   }
 }
 
-codex_handle_server_request <- function(provider, msg) {
+codex_handle_server_request <- function(provider, msg, tools = NULL) {
   method <- msg$method %||% ""
   if (identical(method, "item/commandExecution/requestApproval")) {
     codex_write_message(provider, list(
@@ -300,15 +305,10 @@ codex_handle_server_request <- function(provider, msg) {
       result = list(decision = "decline")
     ))
   } else if (identical(method, "item/tool/call")) {
+    result <- codex_tool_call(provider, msg$params, tools = tools)
     codex_write_message(provider, list(
       id = msg$id,
-      result = list(
-        contentItems = list(list(
-          type = "inputText",
-          text = "Tool calls are not implemented yet in chat_codex."
-        )),
-        success = FALSE
-      )
+      result = result
     ))
   } else {
     codex_write_message(provider, list(id = msg$id, result = list()))
@@ -369,4 +369,79 @@ codex_runtime_new <- function() {
   runtime$output_lines <- character()
   runtime$next_request_id <- 1
   runtime
+}
+
+codex_dynamic_tools <- function(provider, tools = NULL) {
+  if (is.null(tools) || length(tools) == 0) {
+    return(list())
+  }
+
+  specs <- lapply(tools, function(tool) {
+    if (!S7_inherits(tool, ToolDef)) {
+      return(NULL)
+    }
+    list(
+      name = tool@name,
+      description = tool@description,
+      inputSchema = as_json(provider, tool@arguments)
+    )
+  })
+
+  unname(specs[!map_lgl(specs, is.null)])
+}
+
+codex_tool_call <- function(provider, params, tools = NULL) {
+  tool_name <- params$tool %||% ""
+  tool <- tools[[tool_name]]
+  request <- ContentToolRequest(
+    id = params$callId %||% "",
+    name = tool_name,
+    arguments = params$arguments %||% list(),
+    tool = tool
+  )
+
+  result <- invoke_tool(request)
+  if (tool_errored(result)) {
+    return(list(
+      contentItems = list(list(
+        type = "inputText",
+        text = tool_error_string(result)
+      )),
+      success = FALSE
+    ))
+  }
+
+  value <- result@value
+  if (S7_inherits(value, ContentImageRemote)) {
+    return(list(
+      contentItems = list(list(type = "inputImage", imageUrl = value@url)),
+      success = TRUE
+    ))
+  }
+  if (S7_inherits(value, ContentImageInline)) {
+    return(list(
+      contentItems = list(list(
+        type = "inputImage",
+        imageUrl = paste0("data:", value@type, ";base64,", value@data)
+      )),
+      success = TRUE
+    ))
+  }
+  if (S7_inherits(value, Content)) {
+    return(list(
+      contentItems = list(list(
+        type = "inputText",
+        text = paste0(
+          "Unsupported tool output type for chat_codex: ",
+          class_name(value)
+        )
+      )),
+      success = FALSE
+    ))
+  }
+
+  list(
+    contentItems = list(list(type = "inputText", text = tool_string(result))),
+    success = TRUE
+  )
 }

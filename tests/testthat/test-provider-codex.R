@@ -58,3 +58,73 @@ test_that("chat_codex() can run a basic turn via app-server protocol", {
   out <- chat$chat("Say hello")
   expect_equal(as.character(out), "hello from mock")
 })
+
+mock_codex_bin_with_tool_call <- function() {
+  path <- tempfile(fileext = ".py")
+  code <- c(
+    "#!/usr/bin/env python3",
+    "import json, sys",
+    "",
+    "def send(msg):",
+    "    sys.stdout.write(json.dumps(msg) + '\\n')",
+    "    sys.stdout.flush()",
+    "",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line:",
+    "        continue",
+    "    msg = json.loads(line)",
+    "    method = msg.get('method')",
+    "    req_id = msg.get('id')",
+    "",
+    "    if method == 'initialize':",
+    "        send({'id': req_id, 'result': {'userAgent': 'mock-codex/0.1'}})",
+    "    elif method == 'initialized':",
+    "        continue",
+    "    elif method == 'thread/start':",
+    "        dynamic_tools = (msg.get('params') or {}).get('dynamicTools') or []",
+    "        if not dynamic_tools or dynamic_tools[0].get('name') != 'add_one':",
+    "            send({'id': req_id, 'error': {'code': 1, 'message': 'dynamic tools missing'}})",
+    "            continue",
+    "        send({'id': req_id, 'result': {'thread': {'id': 'thr_tools', 'preview': '', 'modelProvider': 'openai', 'createdAt': 0}}})",
+    "        send({'method': 'thread/started', 'params': {'thread': {'id': 'thr_tools'}}})",
+    "    elif method == 'turn/start':",
+    "        turn = {'id': 'turn_tools', 'status': 'inProgress', 'items': [], 'error': None}",
+    "        send({'id': req_id, 'result': {'turn': turn}})",
+    "        send({'method': 'item/tool/call', 'id': 60, 'params': {'threadId': 'thr_tools', 'turnId': 'turn_tools', 'callId': 'call_1', 'tool': 'add_one', 'arguments': {'x': 2}}})",
+    "        tool_result = None",
+    "        while tool_result is None:",
+    "            incoming = sys.stdin.readline()",
+    "            if not incoming:",
+    "                sys.exit(1)",
+    "            incoming = incoming.strip()",
+    "            if not incoming:",
+    "                continue",
+    "            parsed = json.loads(incoming)",
+    "            if parsed.get('id') == 60:",
+    "                tool_result = parsed",
+    "        text = ((tool_result.get('result') or {}).get('contentItems') or [{}])[0].get('text', '')",
+    "        send({'method': 'item/completed', 'params': {'threadId': 'thr_tools', 'turnId': 'turn_tools', 'item': {'type': 'agentMessage', 'id': 'item_1', 'text': text}}})",
+    "        send({'method': 'turn/completed', 'params': {'threadId': 'thr_tools', 'turn': {'id': 'turn_tools', 'status': 'completed', 'items': [], 'error': None}}})",
+    "    else:",
+    "        if req_id is not None:",
+    "            send({'id': req_id, 'result': {}})"
+  )
+  writeLines(code, path)
+  Sys.chmod(path, "755")
+  path
+}
+
+test_that("chat_codex() bridges dynamic tool calls through ellmer tools", {
+  codex_bin <- mock_codex_bin_with_tool_call()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+  chat$register_tool(tool(
+    function(x) x + 1,
+    name = "add_one",
+    description = "Add one",
+    arguments = list(x = type_integer("Input integer"))
+  ))
+
+  out <- chat$chat("Use the tool")
+  expect_equal(as.character(out), "3")
+})
