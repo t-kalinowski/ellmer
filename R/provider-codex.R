@@ -38,7 +38,8 @@ chat_codex <- function(
     extra_args = list(),
     extra_headers = character(),
     credentials = NULL,
-    codex_bin = codex_bin
+    codex_bin = codex_bin,
+    runtime = codex_runtime_new()
   )
 
   Chat$new(provider = provider, system_prompt = system_prompt, echo = echo)
@@ -48,6 +49,324 @@ ProviderCodex <- new_class(
   "ProviderCodex",
   parent = Provider,
   properties = list(
-    codex_bin = prop_string()
+    codex_bin = prop_string(),
+    runtime = class_any
   )
 )
+
+method(chat_perform_provider, ProviderCodex) <- function(
+  provider,
+  mode = c("value", "stream", "async-stream", "async-value"),
+  turns,
+  tools = NULL,
+  type = NULL
+) {
+  mode <- arg_match(mode)
+  if (mode %in% c("async-stream", "async-value")) {
+    cli::cli_abort(
+      "{.fn chat_codex} does not yet support async chat methods.",
+      class = "ellmer_codex_async_not_supported"
+    )
+  }
+  if (!is.null(type)) {
+    cli::cli_abort(
+      "{.fn chat_codex} structured output is not implemented yet.",
+      class = "ellmer_codex_structured_not_supported"
+    )
+  }
+
+  input <- codex_turn_input(turns[[length(turns)]])
+  result <- codex_run_turn(provider, input)
+
+  if (mode == "value") {
+    result
+  } else {
+    coro::generator(function() {
+      for (delta in result$deltas) {
+        yield(list(type = "item/agentMessage/delta", delta = delta))
+      }
+      yield(list(type = "turn/completed", result = result))
+      coro::exhausted()
+    })
+  }
+}
+
+method(chat_response_body, ProviderCodex) <- function(provider, response) {
+  response
+}
+
+method(chat_response_duration, ProviderCodex) <- function(provider, response) {
+  response$duration
+}
+
+method(stream_content, ProviderCodex) <- function(provider, event) {
+  if (is.null(event) || !identical(event$type, "item/agentMessage/delta")) {
+    return(NULL)
+  }
+  ContentText(event$delta)
+}
+
+method(stream_merge_chunks, ProviderCodex) <- function(provider, result, chunk) {
+  if (is.null(chunk) || !identical(chunk$type, "turn/completed")) {
+    return(result)
+  }
+  chunk$result
+}
+
+method(value_turn, ProviderCodex) <- function(provider, result, has_type = FALSE) {
+  AssistantTurn(
+    contents = list(ContentText(result$text %||% "")),
+    json = list(),
+    tokens = unlist(tokens()),
+    duration = result$duration %||% NA_real_
+  )
+}
+
+codex_turn_input <- function(turn) {
+  is_text <- map_lgl(turn@contents, S7_inherits, ContentText)
+  if (!any(is_text)) {
+    cli::cli_abort("{.fn chat_codex} currently only supports text user input.")
+  }
+
+  lapply(turn@contents[is_text], function(content) {
+    list(type = "text", text = content@text)
+  })
+}
+
+codex_run_turn <- function(provider, input) {
+  codex_ensure_thread(provider)
+  runtime <- provider@runtime
+  start <- Sys.time()
+
+  request_id <- codex_send_request(provider, "turn/start", list(
+    threadId = runtime$thread_id,
+    input = input
+  ))
+
+  response_received <- FALSE
+  deltas <- character()
+  final_text <- NULL
+
+  repeat {
+    msg <- codex_read_message(provider)
+
+    if (!is.null(msg$id) && as.numeric(msg$id) == as.numeric(request_id)) {
+      response_received <- TRUE
+      next
+    }
+
+    if (!is.null(msg$id) && !is.null(msg$method)) {
+      codex_handle_server_request(provider, msg)
+      next
+    }
+
+    if (is.null(msg$method)) {
+      next
+    }
+
+    if (identical(msg$method, "item/agentMessage/delta")) {
+      delta <- msg$params$delta %||% ""
+      deltas <- c(deltas, delta)
+      next
+    }
+
+    if (identical(msg$method, "item/completed")) {
+      item <- msg$params$item
+      if (identical(item$type, "agentMessage")) {
+        final_text <- item$text
+      }
+      next
+    }
+
+    if (identical(msg$method, "turn/completed")) {
+      status <- msg$params$turn$status %||% "failed"
+      if (!identical(status, "completed")) {
+        err <- msg$params$turn$error$message %||% "Codex turn failed."
+        cli::cli_abort(err, class = "ellmer_codex_turn_failed")
+      }
+      break
+    }
+  }
+
+  if (!response_received) {
+    cli::cli_abort("Codex turn did not return a response.")
+  }
+
+  if (is.null(final_text)) {
+    final_text <- paste0(deltas, collapse = "")
+  }
+
+  list(
+    text = final_text,
+    deltas = deltas,
+    duration = as.numeric(difftime(Sys.time(), start, units = "secs"))
+  )
+}
+
+codex_ensure_thread <- function(provider) {
+  codex_ensure_initialized(provider)
+  runtime <- provider@runtime
+  if (!is.null(runtime$thread_id)) {
+    return(invisible())
+  }
+
+  request_id <- codex_send_request(provider, "thread/start", list(
+    model = provider@model
+  ))
+  response <- codex_wait_response(provider, request_id)
+  runtime$thread_id <- response$result$thread$id
+  invisible()
+}
+
+codex_ensure_initialized <- function(provider) {
+  runtime <- provider@runtime
+  if (!is.null(runtime$process) && runtime$process$is_alive()) {
+    if (isTRUE(runtime$initialized)) {
+      return(invisible())
+    }
+  } else {
+    runtime$process <- processx::process$new(
+      command = provider@codex_bin,
+      args = c("app-server"),
+      stdin = "|",
+      stdout = "|",
+      stderr = "|",
+      cleanup = FALSE
+    )
+    runtime$initialized <- FALSE
+    runtime$thread_id <- NULL
+    runtime$output_buffer <- ""
+    runtime$output_lines <- character()
+    runtime$next_request_id <- 1
+  }
+
+  request_id <- codex_send_request(provider, "initialize", list(
+    clientInfo = list(
+      name = "r_ellmer",
+      title = "ellmer",
+      version = as.character(utils::packageVersion("ellmer"))
+    )
+  ))
+  codex_wait_response(provider, request_id)
+  codex_send_notification(provider, "initialized", list())
+  runtime$initialized <- TRUE
+  invisible()
+}
+
+codex_send_notification <- function(provider, method, params = list()) {
+  codex_write_message(provider, list(method = method, params = params))
+}
+
+codex_send_request <- function(provider, method, params = list()) {
+  runtime <- provider@runtime
+  request_id <- runtime$next_request_id
+  runtime$next_request_id <- request_id + 1
+  codex_write_message(provider, list(
+    method = method,
+    id = request_id,
+    params = params
+  ))
+  request_id
+}
+
+codex_wait_response <- function(provider, request_id) {
+  repeat {
+    msg <- codex_read_message(provider)
+
+    if (!is.null(msg$id) && !is.null(msg$method)) {
+      codex_handle_server_request(provider, msg)
+      next
+    }
+
+    if (!is.null(msg$id) && as.numeric(msg$id) == as.numeric(request_id)) {
+      if (!is.null(msg$error)) {
+        cli::cli_abort(msg$error$message %||% "Codex request failed.")
+      }
+      return(msg)
+    }
+  }
+}
+
+codex_handle_server_request <- function(provider, msg) {
+  method <- msg$method %||% ""
+  if (identical(method, "item/commandExecution/requestApproval")) {
+    codex_write_message(provider, list(
+      id = msg$id,
+      result = list(decision = "decline")
+    ))
+  } else if (identical(method, "item/fileChange/requestApproval")) {
+    codex_write_message(provider, list(
+      id = msg$id,
+      result = list(decision = "decline")
+    ))
+  } else if (identical(method, "item/tool/call")) {
+    codex_write_message(provider, list(
+      id = msg$id,
+      result = list(
+        contentItems = list(list(
+          type = "inputText",
+          text = "Tool calls are not implemented yet in chat_codex."
+        )),
+        success = FALSE
+      )
+    ))
+  } else {
+    codex_write_message(provider, list(id = msg$id, result = list()))
+  }
+}
+
+codex_write_message <- function(provider, msg) {
+  json <- unclass(jsonlite::toJSON(msg, auto_unbox = TRUE, null = "null"))
+  provider@runtime$process$write_input(paste0(json, "\n"), sep = "")
+}
+
+codex_read_message <- function(provider, timeout_ms = 10000) {
+  runtime <- provider@runtime
+  proc <- runtime$process
+  deadline <- Sys.time() + timeout_ms / 1000
+
+  while (Sys.time() < deadline) {
+    if (length(runtime$output_lines) > 0) {
+      line <- runtime$output_lines[[1]]
+      runtime$output_lines <- runtime$output_lines[-1]
+      line <- sub("\r$", "", line)
+      if (!nzchar(line)) {
+        next
+      }
+      return(jsonlite::parse_json(line, simplifyVector = FALSE))
+    }
+
+    io <- proc$poll_io(100)
+
+    if (identical(io[["error"]], "ready")) {
+      errors <- proc$read_error_lines()
+      if (length(errors) > 0) {
+        cli::cli_warn("codex app-server stderr: {errors[[1]]}")
+      }
+    }
+
+    if (identical(io[["output"]], "ready")) {
+      lines <- proc$read_output_lines()
+      if (length(lines) > 0) {
+        runtime$output_lines <- c(runtime$output_lines, lines)
+      }
+    }
+
+    if (!proc$is_alive()) {
+      cli::cli_abort("Codex app-server process exited unexpectedly.")
+    }
+  }
+
+  cli::cli_abort("Timed out waiting for Codex app-server output.")
+}
+
+codex_runtime_new <- function() {
+  runtime <- new.env(parent = emptyenv())
+  runtime$process <- NULL
+  runtime$initialized <- FALSE
+  runtime$thread_id <- NULL
+  runtime$output_buffer <- ""
+  runtime$output_lines <- character()
+  runtime$next_request_id <- 1
+  runtime
+}
