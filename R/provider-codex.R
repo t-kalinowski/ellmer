@@ -360,6 +360,7 @@ codex_ensure_initialized <- function(provider) {
       return(invisible())
     }
   } else {
+    codex_bootstrap_auth(codex_home_dir())
     codex_bin <- codex_resolve_bin(provider@codex_bin)
     runtime$process <- processx::process$new(
       command = codex_bin,
@@ -610,6 +611,38 @@ codex_home_dir <- function() {
   path <- file.path(tools::R_user_dir("ellmer", which = "data"), "codex")
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
   path
+}
+
+codex_default_home_dir <- function() {
+  env_home <- Sys.getenv("CODEX_HOME", unset = "")
+  if (nzchar(env_home)) {
+    return(path.expand(env_home))
+  }
+  path.expand("~/.codex")
+}
+
+codex_bootstrap_auth <- function(target_home) {
+  target_auth <- file.path(target_home, "auth.json")
+  if (file.exists(target_auth)) {
+    return(invisible())
+  }
+
+  source_home <- codex_default_home_dir()
+  source_auth <- file.path(source_home, "auth.json")
+  if (
+    !file.exists(source_auth) ||
+      identical(normalizePath(source_home, winslash = "/", mustWork = FALSE),
+                normalizePath(target_home, winslash = "/", mustWork = FALSE))
+  ) {
+    return(invisible())
+  }
+
+  dir.create(target_home, recursive = TRUE, showWarnings = FALSE)
+  ok <- file.copy(source_auth, target_auth, overwrite = FALSE)
+  if (isTRUE(ok)) {
+    Sys.chmod(target_auth, mode = "600")
+  }
+  invisible()
 }
 
 codex_maybe_emit_event <- function(provider, msg, emit_events = FALSE) {

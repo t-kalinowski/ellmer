@@ -17,6 +17,21 @@ test_that("chat_codex() errors clearly when codex binary is missing", {
   )
 })
 
+test_that("codex bootstrap copies auth.json into isolated codex home", {
+  source_home <- tempfile("codex-src-")
+  target_home <- tempfile("codex-target-")
+  dir.create(source_home, recursive = TRUE)
+  dir.create(target_home, recursive = TRUE)
+  writeLines('{"auth_mode":"chatgpt"}', file.path(source_home, "auth.json"))
+
+  withr::local_envvar(c(CODEX_HOME = source_home))
+  codex_bootstrap_auth(target_home)
+
+  expect_true(file.exists(file.path(target_home, "auth.json")))
+  copied <- jsonlite::read_json(file.path(target_home, "auth.json"))
+  expect_equal(copied$auth_mode, "chatgpt")
+})
+
 mock_codex_bin <- function() {
   path <- tempfile(fileext = ".py")
   code <- c(
