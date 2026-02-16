@@ -128,3 +128,57 @@ test_that("chat_codex() bridges dynamic tool calls through ellmer tools", {
   out <- chat$chat("Use the tool")
   expect_equal(as.character(out), "3")
 })
+
+mock_codex_bin_structured <- function() {
+  path <- tempfile(fileext = ".py")
+  code <- c(
+    "#!/usr/bin/env python3",
+    "import json, sys",
+    "",
+    "def send(msg):",
+    "    sys.stdout.write(json.dumps(msg) + '\\n')",
+    "    sys.stdout.flush()",
+    "",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line:",
+    "        continue",
+    "    msg = json.loads(line)",
+    "    method = msg.get('method')",
+    "    req_id = msg.get('id')",
+    "",
+    "    if method == 'initialize':",
+    "        send({'id': req_id, 'result': {'userAgent': 'mock-codex/0.1'}})",
+    "    elif method == 'initialized':",
+    "        continue",
+    "    elif method == 'thread/start':",
+    "        send({'id': req_id, 'result': {'thread': {'id': 'thr_struct', 'preview': '', 'modelProvider': 'openai', 'createdAt': 0}}})",
+    "    elif method == 'turn/start':",
+    "        schema = (msg.get('params') or {}).get('outputSchema') or {}",
+    "        if schema.get('type') != 'object':",
+    "            send({'id': req_id, 'error': {'code': 1, 'message': 'missing outputSchema'}})",
+    "            continue",
+    "        turn = {'id': 'turn_struct', 'status': 'inProgress', 'items': [], 'error': None}",
+    "        send({'id': req_id, 'result': {'turn': turn}})",
+    "        send({'method': 'item/completed', 'params': {'threadId': 'thr_struct', 'turnId': 'turn_struct', 'item': {'type': 'agentMessage', 'id': 'item_1', 'text': '{\"answer\":\"ok\"}'}}})",
+    "        send({'method': 'turn/completed', 'params': {'threadId': 'thr_struct', 'turn': {'id': 'turn_struct', 'status': 'completed', 'items': [], 'error': None}}})",
+    "    else:",
+    "        if req_id is not None:",
+    "            send({'id': req_id, 'result': {}})"
+  )
+  writeLines(code, path)
+  Sys.chmod(path, "755")
+  path
+}
+
+test_that("chat_codex() supports structured output via outputSchema", {
+  codex_bin <- mock_codex_bin_structured()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+
+  out <- chat$chat_structured(
+    "Return structured output",
+    type = type_object(answer = type_string("Final answer"))
+  )
+
+  expect_equal(out$answer, "ok")
+})

@@ -68,15 +68,15 @@ method(chat_perform_provider, ProviderCodex) <- function(
       class = "ellmer_codex_async_not_supported"
     )
   }
-  if (!is.null(type)) {
-    cli::cli_abort(
-      "{.fn chat_codex} structured output is not implemented yet.",
-      class = "ellmer_codex_structured_not_supported"
-    )
-  }
 
   input <- codex_turn_input(turns[[length(turns)]])
-  result <- codex_run_turn(provider, input, tools = tools)
+  output_schema <- if (is.null(type)) NULL else as_json(provider, type)
+  result <- codex_run_turn(
+    provider,
+    input,
+    tools = tools,
+    output_schema = output_schema
+  )
 
   if (mode == "value") {
     result
@@ -114,8 +114,14 @@ method(stream_merge_chunks, ProviderCodex) <- function(provider, result, chunk) 
 }
 
 method(value_turn, ProviderCodex) <- function(provider, result, has_type = FALSE) {
+  contents <- if (has_type) {
+    list(ContentJson(string = result$text %||% ""))
+  } else {
+    list(ContentText(result$text %||% ""))
+  }
+
   AssistantTurn(
-    contents = list(ContentText(result$text %||% "")),
+    contents = contents,
     json = list(),
     tokens = unlist(tokens()),
     duration = result$duration %||% NA_real_
@@ -133,15 +139,25 @@ codex_turn_input <- function(turn) {
   })
 }
 
-codex_run_turn <- function(provider, input, tools = NULL) {
+codex_run_turn <- function(
+  provider,
+  input,
+  tools = NULL,
+  output_schema = NULL
+) {
   codex_ensure_thread(provider, tools = tools)
   runtime <- provider@runtime
   start <- Sys.time()
 
-  request_id <- codex_send_request(provider, "turn/start", list(
+  params <- list(
     threadId = runtime$thread_id,
     input = input
-  ))
+  )
+  if (!is.null(output_schema)) {
+    params$outputSchema <- output_schema
+  }
+
+  request_id <- codex_send_request(provider, "turn/start", params)
 
   response_received <- FALSE
   deltas <- character()
