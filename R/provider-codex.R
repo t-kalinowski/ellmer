@@ -669,29 +669,28 @@ codex_event_line <- function(provider, msg) {
     return(paste0("[codex] ", method, " ", payload))
   }
 
-  if (identical(method, "turn/started")) {
-    return("[codex] turn started")
-  }
   if (identical(method, "turn/completed")) {
     status <- msg$params$turn$status %||% "unknown"
+    if (identical(status, "completed")) {
+      return("[codex] done")
+    }
     return(paste0("[codex] turn ", status))
   }
   if (identical(method, "item/tool/call")) {
     tool <- msg$params$tool %||% "unknown"
-    return(paste0("[codex] tool call: ", tool))
+    return(paste0("[codex] tool: ", tool))
   }
   if (identical(method, "item/commandExecution/requestApproval")) {
-    return("[codex] command approval requested")
+    return("[codex] approval requested: command")
   }
   if (identical(method, "item/fileChange/requestApproval")) {
-    return("[codex] file change approval requested")
+    return("[codex] approval requested: file changes")
   }
   if (identical(method, "item/started")) {
     item <- msg$params$item %||% list()
     type <- item$type %||% "item"
     if (identical(type, "commandExecution")) {
-      cmd <- paste(item$command %||% character(), collapse = " ")
-      return(paste0("[codex] command: ", cmd))
+      return(paste0("[codex] running: ", codex_command_summary(item)))
     }
     if (identical(type, "fileChange")) {
       return("[codex] file changes proposed")
@@ -700,19 +699,61 @@ codex_event_line <- function(provider, msg) {
       tool <- item$tool %||% "tool"
       return(paste0("[codex] app tool: ", tool))
     }
-    return(paste0("[codex] ", type, " started"))
+    return(NULL)
   }
   if (identical(method, "item/completed")) {
     item <- msg$params$item %||% list()
     type <- item$type %||% "item"
     if (identical(type, "commandExecution")) {
       status <- item$status %||% "completed"
-      return(paste0("[codex] command ", status))
+      if (!identical(status, "completed")) {
+        return(paste0("[codex] command ", status))
+      }
+      return(NULL)
     }
-    return(paste0("[codex] ", type, " completed"))
+    if (identical(type, "fileChange")) {
+      status <- item$status %||% "completed"
+      if (!identical(status, "completed")) {
+        return(paste0("[codex] file changes ", status))
+      }
+      return(NULL)
+    }
+    if (identical(type, "mcpToolCall")) {
+      status <- item$status %||% "completed"
+      if (!identical(status, "completed")) {
+        return(paste0("[codex] app tool ", status))
+      }
+      return(NULL)
+    }
+    return(NULL)
   }
 
   NULL
+}
+
+codex_command_summary <- function(item) {
+  cmd <- item$command %||% character()
+  if (length(cmd) == 0) {
+    return("<command>")
+  }
+
+  head <- basename(cmd[[1]])
+  if (
+    length(cmd) >= 3 &&
+      identical(cmd[[2]], "-lc") &&
+      head %in% c("sh", "bash", "zsh")
+  ) {
+    summary <- cmd[[3]]
+  } else {
+    summary <- paste(cmd, collapse = " ")
+  }
+
+  summary <- trimws(gsub("[[:space:]]+", " ", summary))
+  if (nchar(summary) > 90) {
+    paste0(substr(summary, 1, 87), "...")
+  } else {
+    summary
+  }
 }
 
 codex_shutdown_all_runtimes <- function() {

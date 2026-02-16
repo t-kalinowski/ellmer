@@ -165,6 +165,55 @@ test_that("chat_codex() emits app-server status events in stream mode", {
   expect_true(any(grepl("^\\[codex\\]", messages)))
 })
 
+test_that("codex status event formatting is concise by default", {
+  provider <- chat_codex(echo = "none")$get_provider()
+
+  expect_null(codex_event_line(provider, list(
+    method = "turn/started",
+    params = list(turn = list(status = "inProgress"))
+  )))
+  expect_null(codex_event_line(provider, list(
+    method = "item/started",
+    params = list(item = list(type = "reasoning"))
+  )))
+  expect_null(codex_event_line(provider, list(
+    method = "item/completed",
+    params = list(item = list(type = "agentMessage"))
+  )))
+
+  expect_equal(
+    codex_event_line(provider, list(
+      method = "item/started",
+      params = list(item = list(
+        type = "commandExecution",
+        command = list("/bin/zsh", "-lc", "ls -la && echo done")
+      ))
+    )),
+    "[codex] running: ls -la && echo done"
+  )
+  expect_equal(
+    codex_event_line(provider, list(
+      method = "item/completed",
+      params = list(item = list(type = "commandExecution", status = "failed"))
+    )),
+    "[codex] command failed"
+  )
+  expect_equal(
+    codex_event_line(provider, list(
+      method = "item/tool/call",
+      params = list(tool = "add_one")
+    )),
+    "[codex] tool: add_one"
+  )
+  expect_equal(
+    codex_event_line(provider, list(
+      method = "turn/completed",
+      params = list(turn = list(status = "completed"))
+    )),
+    "[codex] done"
+  )
+})
+
 mock_codex_bin_with_tool_call <- function() {
   path <- tempfile(fileext = ".py")
   code <- c(
