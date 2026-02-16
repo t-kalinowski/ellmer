@@ -28,7 +28,9 @@ Success is demonstrated by a full round trip where:
 - [x] (2026-02-16 01:35Z) Implemented dynamic tool bridge (`thread/start.dynamicTools` + `item/tool/call` execution through ellmer `invoke_tool()`).
 - [x] (2026-02-16 01:50Z) Implemented structured output bridge using `turn/start.outputSchema` and `ContentJson` turn assembly.
 - [x] (2026-02-16 02:05Z) Added deterministic mock app-server tests covering constructor, text turns, dynamic tool calls, structured output, and tool-set locking.
-- [ ] Add docs and explicit unsupported-feature behavior.
+- [x] (2026-02-16 02:25Z) Added explicit unsupported-surface fail-fast errors for async, batch, and parallel APIs on `chat_codex`.
+- [x] (2026-02-16 02:40Z) Added runtime lifecycle cleanup (`codex_runtime_stop`, global runtime shutdown, `.onUnload` hook).
+- [x] (2026-02-16 02:50Z) Regenerated docs and exports (`chat_codex` now appears in `NAMESPACE` and `man/chat_codex.Rd`).
 
 ## Surprises & Discoveries
 
@@ -55,6 +57,9 @@ Success is demonstrated by a full round trip where:
 
 - Observation: R named lists serialize to JSON objects, not arrays; this breaks `dynamicTools` payload shape unless names are dropped.
   Evidence: mock app-server rejected first tool registration until `dynamicTools` list was wrapped with `unname(...)`.
+
+- Observation: testthat parallel workers in this environment require escalated permissions for `processx` initialization.
+  Evidence: non-escalated multi-process `devtools::test()` failed with `.onLoad failed in loadNamespace() for 'processx': Operation not permitted`.
 
 ## Decision Log
 
@@ -84,7 +89,9 @@ Success is demonstrated by a full round trip where:
 
 ## Outcomes & Retrospective
 
-Core provider implementation is now in place and exercised by deterministic tests: transport seam, app-server runtime, text chat, dynamic tool calls, structured output, and tool-set locking are implemented. Remaining work is documentation and explicit unsupported-surface handling polish. The largest remaining risk is lifecycle cleanup for long-lived child processes (finalizers/unload behavior), which should be handled before release.
+The planned v1 Codex provider scope is now complete. Ellmer has a working `chat_codex()` implementation backed by the official Codex app-server protocol, with persistent thread runtime, dynamic tool execution through ellmer tools, structured output support, explicit unsupported-surface errors, and runtime cleanup hooks.
+
+The design held up: the transport seam avoided invasive refactors, and app-server JSON-RPC semantics mapped cleanly once line framing and tool schema details were implemented carefully. The main implementation lessons were to treat `item/completed` as authoritative for final text and to avoid named-list JSON shape pitfalls when emitting protocol arrays.
 
 ## Context and Orientation
 
