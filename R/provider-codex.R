@@ -23,7 +23,7 @@ NULL
 #' @returns A [Chat] object.
 chat_codex <- function(
   system_prompt = NULL,
-  model = "gpt-5-codex",
+  model = "gpt-5.3-codex",
   params = NULL,
   codex_bin = "codex",
   echo = c("none", "output", "all")
@@ -87,13 +87,14 @@ method(chat_perform_provider, ProviderCodex) <- function(
   if (mode == "value") {
     result
   } else {
-    coro::generator(function() {
+    iter <- coro::generator(function() {
       for (delta in result$deltas) {
         yield(list(type = "item/agentMessage/delta", delta = delta))
       }
       yield(list(type = "turn/completed", result = result))
       coro::exhausted()
     })
+    iter()
   }
 }
 
@@ -112,14 +113,22 @@ method(stream_content, ProviderCodex) <- function(provider, event) {
   ContentText(event$delta)
 }
 
-method(stream_merge_chunks, ProviderCodex) <- function(provider, result, chunk) {
+method(stream_merge_chunks, ProviderCodex) <- function(
+  provider,
+  result,
+  chunk
+) {
   if (is.null(chunk) || !identical(chunk$type, "turn/completed")) {
     return(result)
   }
   chunk$result
 }
 
-method(value_turn, ProviderCodex) <- function(provider, result, has_type = FALSE) {
+method(value_turn, ProviderCodex) <- function(
+  provider,
+  result,
+  has_type = FALSE
+) {
   contents <- if (has_type) {
     list(ContentJson(string = result$text %||% ""))
   } else {
@@ -269,14 +278,18 @@ codex_ensure_initialized <- function(provider) {
     runtime$next_request_id <- 1
   }
 
-  request_id <- codex_send_request(provider, "initialize", list(
-    clientInfo = list(
-      name = "r_ellmer",
-      title = "ellmer",
-      version = as.character(utils::packageVersion("ellmer"))
-    ),
-    capabilities = list(experimentalApi = TRUE)
-  ))
+  request_id <- codex_send_request(
+    provider,
+    "initialize",
+    list(
+      clientInfo = list(
+        name = "r_ellmer",
+        title = "ellmer",
+        version = as.character(utils::packageVersion("ellmer"))
+      ),
+      capabilities = list(experimentalApi = TRUE)
+    )
+  )
   codex_wait_response(provider, request_id)
   codex_send_notification(provider, "initialized", list())
   runtime$initialized <- TRUE
@@ -291,11 +304,14 @@ codex_send_request <- function(provider, method, params = list()) {
   runtime <- provider@runtime
   request_id <- runtime$next_request_id
   runtime$next_request_id <- request_id + 1
-  codex_write_message(provider, list(
-    method = method,
-    id = request_id,
-    params = params
-  ))
+  codex_write_message(
+    provider,
+    list(
+      method = method,
+      id = request_id,
+      params = params
+    )
+  )
   request_id
 }
 
@@ -320,21 +336,30 @@ codex_wait_response <- function(provider, request_id, tools = NULL) {
 codex_handle_server_request <- function(provider, msg, tools = NULL) {
   method <- msg$method %||% ""
   if (identical(method, "item/commandExecution/requestApproval")) {
-    codex_write_message(provider, list(
-      id = msg$id,
-      result = list(decision = "decline")
-    ))
+    codex_write_message(
+      provider,
+      list(
+        id = msg$id,
+        result = list(decision = "decline")
+      )
+    )
   } else if (identical(method, "item/fileChange/requestApproval")) {
-    codex_write_message(provider, list(
-      id = msg$id,
-      result = list(decision = "decline")
-    ))
+    codex_write_message(
+      provider,
+      list(
+        id = msg$id,
+        result = list(decision = "decline")
+      )
+    )
   } else if (identical(method, "item/tool/call")) {
     result <- codex_tool_call(provider, msg$params, tools = tools)
-    codex_write_message(provider, list(
-      id = msg$id,
-      result = result
-    ))
+    codex_write_message(
+      provider,
+      list(
+        id = msg$id,
+        result = result
+      )
+    )
   } else {
     codex_write_message(provider, list(id = msg$id, result = list()))
   }
@@ -400,10 +425,14 @@ codex_runtime_new <- function() {
   runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
   codex_register_runtime(runtime)
-  reg.finalizer(runtime, function(x) {
-    codex_runtime_stop(x)
-    codex_unregister_runtime(x)
-  }, onexit = TRUE)
+  reg.finalizer(
+    runtime,
+    function(x) {
+      codex_runtime_stop(x)
+      codex_unregister_runtime(x)
+    },
+    onexit = TRUE
+  )
   runtime
 }
 
@@ -414,7 +443,10 @@ codex_register_runtime <- function(runtime) {
 
 codex_unregister_runtime <- function(runtime) {
   id <- runtime$id %||% NULL
-  if (!is.null(id) && exists(id, envir = .codex_runtime_registry$runtimes, inherits = FALSE)) {
+  if (
+    !is.null(id) &&
+      exists(id, envir = .codex_runtime_registry$runtimes, inherits = FALSE)
+  ) {
     rm(list = id, envir = .codex_runtime_registry$runtimes)
   }
   invisible()

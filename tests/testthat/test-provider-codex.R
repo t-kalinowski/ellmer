@@ -4,7 +4,7 @@ test_that("chat_codex() creates a chat with a codex provider", {
 
   expect_true(S7_inherits(provider, ProviderCodex))
   expect_equal(provider@name, "Codex")
-  expect_equal(provider@model, "gpt-5-codex")
+  expect_equal(provider@model, "gpt-5.3-codex")
   expect_equal(provider@codex_bin, "codex")
 })
 
@@ -56,6 +56,14 @@ test_that("chat_codex() can run a basic turn via app-server protocol", {
   chat <- chat_codex(codex_bin = codex_bin, echo = "none")
 
   out <- chat$chat("Say hello")
+  expect_equal(as.character(out), "hello from mock")
+})
+
+test_that("chat_codex() supports stream-mode chat path", {
+  codex_bin <- mock_codex_bin()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "output")
+
+  out <- chat$chat("Say hello in stream mode")
   expect_equal(as.character(out), "hello from mock")
 })
 
