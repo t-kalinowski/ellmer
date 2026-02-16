@@ -398,6 +398,7 @@ codex_ensure_initialized <- function(provider) {
     runtime$output_lines <- character()
     runtime$stderr_lines <- character()
     runtime$command_output <- list()
+    runtime$status_tool_requests <- list()
     runtime$tools_signature <- NULL
     runtime$next_request_id <- 1
   }
@@ -591,6 +592,7 @@ codex_runtime_new <- function() {
   runtime$output_lines <- character()
   runtime$stderr_lines <- character()
   runtime$command_output <- list()
+  runtime$status_tool_requests <- list()
   runtime$codex_home <- codex_home_dir()
   runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
@@ -636,6 +638,7 @@ codex_runtime_stop <- function(runtime) {
   runtime$output_lines <- character()
   runtime$stderr_lines <- character()
   runtime$command_output <- list()
+  runtime$status_tool_requests <- list()
   runtime$tools_signature <- NULL
   invisible()
 }
@@ -683,6 +686,13 @@ codex_maybe_emit_event <- function(provider, msg, emit_events = FALSE) {
     return(invisible())
   }
 
+  if (
+    identical(provider@events, "status") &&
+      isTRUE(codex_maybe_emit_tool_status(provider, msg))
+  ) {
+    return(invisible())
+  }
+
   line <- codex_event_line(provider, msg)
   if (!is.null(line)) {
     codex_emit_status_line(line)
@@ -726,58 +736,17 @@ codex_event_line <- function(provider, msg) {
   if (identical(method, "item/started")) {
     item <- msg$params$item %||% list()
     type <- item$type %||% "item"
-    if (identical(type, "commandExecution")) {
-      return(codex_builtin_tool_call_line(
-        "shell",
-        command = codex_command_summary(item)
-      ))
-    }
-    if (identical(type, "fileChange")) {
-      return(codex_builtin_tool_call_line("apply_patch"))
-    }
-    if (identical(type, "mcpToolCall")) {
-      tool <- item$tool %||% "tool"
-      return(codex_builtin_tool_call_line(tool))
+    if (type %in% c("commandExecution", "fileChange", "mcpToolCall")) {
+      return(NULL)
     }
     return(NULL)
   }
   if (identical(method, "item/completed")) {
     item <- msg$params$item %||% list()
     type <- item$type %||% "item"
-    if (identical(type, "commandExecution")) {
-      status <- item$status %||% "completed"
-      if (!identical(status, "completed")) {
-        reason <- codex_command_failure_reason(provider, item)
+    if (type %in% c("commandExecution", "fileChange", "mcpToolCall")) {
+      if (identical(type, "commandExecution")) {
         codex_clear_command_output(provider, item$id %||% "")
-        return(codex_builtin_tool_result_line(
-          status = status,
-          reason = reason,
-          noun = "command"
-        ))
-      }
-      codex_clear_command_output(provider, item$id %||% "")
-      return(NULL)
-    }
-    if (identical(type, "fileChange")) {
-      status <- item$status %||% "completed"
-      if (!identical(status, "completed")) {
-        return(codex_builtin_tool_result_line(
-          status = status,
-          reason = NULL,
-          noun = "file change"
-        ))
-      }
-      return(NULL)
-    }
-    if (identical(type, "mcpToolCall")) {
-      status <- item$status %||% "completed"
-      if (!identical(status, "completed")) {
-        reason <- item$error %||% NULL
-        return(codex_builtin_tool_result_line(
-          status = status,
-          reason = reason,
-          noun = "app tool"
-        ))
       }
       return(NULL)
     }
@@ -823,26 +792,85 @@ codex_command_summary <- function(item) {
   }
 }
 
-codex_builtin_tool_call_line <- function(name, ...) {
-  args <- list(...)
-  if (length(args) == 0) {
-    return(paste0("( ) [tool call] ", name, "()"))
+codex_maybe_emit_tool_status <- function(provider, msg) {
+  method <- msg$method %||% ""
+  if (!method %in% c("item/started", "item/completed")) {
+    return(FALSE)
   }
 
-  pairs <- mapply(function(key, value) {
-    value_txt <- encodeString(as.character(value %||% ""), quote = "\"")
-    paste0(key, " = ", value_txt)
-  }, names(args), args, USE.NAMES = FALSE)
-  paste0("( ) [tool call] ", name, "(", paste(pairs, collapse = ", "), ")")
+  item <- msg$params$item %||% list()
+  item_id <- item$id %||% ""
+  type <- item$type %||% ""
+  if (!type %in% c("commandExecution", "fileChange", "mcpToolCall")) {
+    return(FALSE)
+  }
+
+  if (identical(method, "item/started")) {
+    request <- codex_status_tool_request(item)
+    provider@runtime$status_tool_requests[[item_id]] <- request
+    maybe_echo_tool(request, echo = "output")
+    return(TRUE)
+  }
+
+  status <- item$status %||% "completed"
+  request <- provider@runtime$status_tool_requests[[item_id]] %||%
+    codex_status_tool_request(item)
+  provider@runtime$status_tool_requests[[item_id]] <- NULL
+
+  if (identical(status, "completed")) {
+    return(TRUE)
+  }
+
+  err <- codex_status_tool_error(provider, item)
+  maybe_echo_tool(
+    ContentToolResult(error = err, request = request),
+    echo = "output"
+  )
+  TRUE
 }
 
-codex_builtin_tool_result_line <- function(status, reason = NULL, noun = "tool") {
-  prefix <- if (identical(status, "failed")) "x #> Error: " else "x #> "
-  detail <- reason %||% paste(noun, status)
-  if (!identical(status, "failed")) {
-    detail <- paste(noun, status)
+codex_status_tool_request <- function(item) {
+  type <- item$type %||% ""
+
+  if (identical(type, "commandExecution")) {
+    return(ContentToolRequest(
+      id = item$id %||% "",
+      name = "shell",
+      arguments = list(command = codex_command_summary(item)),
+      tool = NULL,
+      extra = list(source = "codex_builtin")
+    ))
   }
-  paste0(prefix, detail)
+  if (identical(type, "fileChange")) {
+    return(ContentToolRequest(
+      id = item$id %||% "",
+      name = "apply_patch",
+      arguments = list(),
+      tool = NULL,
+      extra = list(source = "codex_builtin")
+    ))
+  }
+
+  ContentToolRequest(
+    id = item$id %||% "",
+    name = item$tool %||% "app_tool",
+    arguments = item$arguments %||% list(),
+    tool = NULL,
+    extra = list(source = "codex_builtin")
+  )
+}
+
+codex_status_tool_error <- function(provider, item) {
+  type <- item$type %||% ""
+  status <- item$status %||% "failed"
+
+  if (identical(type, "commandExecution")) {
+    reason <- codex_command_failure_reason(provider, item)
+    codex_clear_command_output(provider, item$id %||% "")
+    return(reason %||% paste("command", status))
+  }
+
+  item$error %||% paste(type, status)
 }
 
 codex_track_command_output <- function(provider, msg) {

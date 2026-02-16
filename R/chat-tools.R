@@ -315,9 +315,16 @@ maybe_echo_tool <- function(x, echo = "output") {
   }
 
   if (is_tool_request(x)) {
+    source <- x@extra$source %||% ""
+    tag <- if (identical(source, "codex_builtin")) {
+      paste0(cli::col_magenta("[built-in]"), " ")
+    } else {
+      ""
+    }
     cli::cli_text(
       cli::col_blue(cli::symbol$circle),
       " [{cli::col_blue('tool call')}] ",
+      tag,
       cli_escape(format(x, show = "call_short"))
     )
     return(invisible(x))
@@ -339,6 +346,13 @@ maybe_echo_tool <- function(x, echo = "output") {
     value <- tool_string_preview(x)
   }
 
+  source <- x@request@extra$source %||% ""
+  tag <- if (identical(source, "codex_builtin")) {
+    paste0(cli::col_magenta("[built-in] "), "")
+  } else {
+    ""
+  }
+
   value <- cli::style_italic(value)
 
   if (grepl("\n", value)) {
@@ -348,7 +362,7 @@ maybe_echo_tool <- function(x, echo = "output") {
       if (length(lines) > 5) cli::symbol$ellipsis
     )
     lines <- cli::style_italic(lines)
-    cli::cli_text("{icon} #> {header}{lines[1]}")
+    cli::cli_text("{icon} #> {tag}{header}{lines[1]}")
     for (line in lines[-1]) {
       cli::cli_text("\u00a0\u00a0#> {line}")
     }
@@ -359,7 +373,7 @@ maybe_echo_tool <- function(x, echo = "output") {
       value <- paste0(value, cli::symbol$ellipsis)
     }
     value <- cli::style_italic(value)
-    cli::cli_text("{icon} #> {header}{value}")
+    cli::cli_text("{icon} #> {tag}{header}{value}")
   }
 
   invisible(x)

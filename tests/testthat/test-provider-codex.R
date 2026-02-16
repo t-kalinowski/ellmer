@@ -272,32 +272,29 @@ test_that("codex status event formatting is concise by default", {
     params = list(item = list(type = "agentMessage"))
   )))
 
-  expect_equal(
+  expect_null(
     codex_event_line(provider, list(
       method = "item/started",
       params = list(item = list(
         type = "commandExecution",
         command = list("/bin/zsh", "-lc", "ls -la && echo done")
       ))
-    )),
-    "( ) [tool call] shell(command = \"ls -la && echo done\")"
+    ))
   )
-  expect_equal(
+  expect_null(
     codex_event_line(provider, list(
       method = "item/started",
       params = list(item = list(
         type = "commandExecution",
         command = "/bin/zsh -lc \"sed -n '1,220p' DESCRIPTION\""
       ))
-    )),
-    "( ) [tool call] shell(command = \"sed -n '1,220p' DESCRIPTION\")"
+    ))
   )
-  expect_equal(
+  expect_null(
     codex_event_line(provider, list(
       method = "item/completed",
       params = list(item = list(type = "commandExecution", status = "failed"))
-    )),
-    "x #> Error: command failed"
+    ))
   )
   expect_null(
     codex_event_line(provider, list(
@@ -313,8 +310,17 @@ test_that("codex status event formatting is concise by default", {
   )
 })
 
-test_that("codex status event formatting includes failure reason from output deltas", {
+test_that("codex tool-status helpers build request and failure reason", {
   provider <- chat_codex(echo = "none")$get_provider()
+
+  req <- codex_status_tool_request(list(
+    type = "commandExecution",
+    id = "cmd-1",
+    command = "/bin/zsh -lc \"sed -n '1,220p' DESCRIPTION\""
+  ))
+  expect_s7_class(req, ContentToolRequest)
+  expect_equal(req@name, "shell")
+  expect_equal(req@arguments$command, "sed -n '1,220p' DESCRIPTION")
 
   codex_track_command_output(provider, list(
     method = "item/commandExecution/outputDelta",
@@ -324,17 +330,13 @@ test_that("codex status event formatting includes failure reason from output del
     )
   ))
 
-  line <- codex_event_line(provider, list(
-    method = "item/completed",
-    params = list(item = list(
-      type = "commandExecution",
-      id = "cmd-1",
-      status = "failed"
-    ))
+  err <- codex_status_tool_error(provider, list(
+    type = "commandExecution",
+    id = "cmd-1",
+    status = "failed"
   ))
 
-  expect_true(grepl("^x #> Error: ", line))
-  expect_true(grepl("command not found: rg", line))
+  expect_true(grepl("command not found: rg", err))
 })
 
 mock_codex_bin_with_tool_call <- function() {
