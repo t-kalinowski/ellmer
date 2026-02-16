@@ -256,6 +256,13 @@ Chat <- R6::R6Class(
     #'   using the schema. For example, this will turn arrays of objects into
     #'   data frames and arrays of strings into a character vector.
     chat_structured_async = function(..., type, echo = "none", convert = TRUE) {
+      if (S7_inherits(private$provider, ProviderCodex)) {
+        cli::cli_abort(
+          "{.fn chat_codex} does not yet support async chat methods.",
+          class = "ellmer_codex_async_not_supported"
+        )
+      }
+
       finish_tools <- private$complete_dangling_tool_requests()
 
       turn <- user_turn(!!!finish_tools, ..., .check_empty = FALSE)
@@ -293,6 +300,13 @@ Chat <- R6::R6Class(
     #'   an interactive user interface. Concurrent mode is the default and is
     #'   best suited for automated scripts or non-interactive applications.
     chat_async = function(..., tool_mode = c("concurrent", "sequential")) {
+      if (S7_inherits(private$provider, ProviderCodex)) {
+        cli::cli_abort(
+          "{.fn chat_codex} does not yet support async chat methods.",
+          class = "ellmer_codex_async_not_supported"
+        )
+      }
+
       finish_tools <- private$complete_dangling_tool_requests()
 
       turn <- user_turn(!!!finish_tools, ...)
@@ -353,6 +367,13 @@ Chat <- R6::R6Class(
       tool_mode = c("concurrent", "sequential"),
       stream = c("text", "content")
     ) {
+      if (S7_inherits(private$provider, ProviderCodex)) {
+        cli::cli_abort(
+          "{.fn chat_codex} does not yet support async chat methods.",
+          class = "ellmer_codex_async_not_supported"
+        )
+      }
+
       finish_tools <- private$complete_dangling_tool_requests()
 
       turn <- user_turn(!!!finish_tools, ...)

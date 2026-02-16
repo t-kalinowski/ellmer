@@ -207,3 +207,46 @@ test_that("chat_codex() locks tool set after first thread start", {
     class = "ellmer_codex_tool_set_locked"
   )
 })
+
+test_that("chat_codex() fails fast for unsupported async, batch, and parallel APIs", {
+  codex_bin <- mock_codex_bin()
+  chat <- chat_codex(codex_bin = codex_bin, echo = "none")
+
+  expect_error(
+    chat$chat_async("hi"),
+    class = "ellmer_codex_async_not_supported"
+  )
+  expect_error(
+    chat$stream_async("hi"),
+    class = "ellmer_codex_async_not_supported"
+  )
+  expect_error(
+    chat$chat_structured_async("hi", type = type_object(x = type_string())),
+    class = "ellmer_codex_async_not_supported"
+  )
+
+  prompts <- list("a", "b")
+  expect_error(
+    batch_chat(chat, prompts, path = tempfile(fileext = ".json"), wait = FALSE),
+    class = "ellmer_codex_batch_not_supported"
+  )
+  expect_error(
+    batch_chat_structured(
+      chat,
+      prompts,
+      path = tempfile(fileext = ".json"),
+      type = type_object(x = type_string()),
+      wait = FALSE
+    ),
+    class = "ellmer_codex_batch_not_supported"
+  )
+
+  expect_error(
+    parallel_chat(chat, prompts),
+    class = "ellmer_codex_parallel_not_supported"
+  )
+  expect_error(
+    parallel_chat_structured(chat, prompts, type = type_object(x = type_string())),
+    class = "ellmer_codex_parallel_not_supported"
+  )
+})

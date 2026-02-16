@@ -395,6 +395,14 @@ check_has_batch_support <- function(provider, call = caller_env()) {
     return(invisible())
   }
 
+  if (S7_inherits(provider, ProviderCodex)) {
+    cli::cli_abort(
+      "{.fn chat_codex} does not support batch APIs in this release.",
+      class = "ellmer_codex_batch_not_supported",
+      call = call
+    )
+  }
+
   cli::cli_abort(
     "Batch requests are not currently supported by this provider.",
     call = call

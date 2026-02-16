@@ -71,6 +71,7 @@ parallel_chat <- function(
   on_error = c("return", "continue", "stop")
 ) {
   chat <- as_chat(chat)
+  check_has_parallel_support(chat$get_provider())
   on_error <- arg_match(on_error)
 
   my_parallel_turns <- function(conversations) {
@@ -184,6 +185,7 @@ parallel_chat_structured <- function(
   on_error = c("return", "continue", "stop")
 ) {
   chat <- as_chat(chat)
+  check_has_parallel_support(chat$get_provider())
   turns <- as_user_turns(prompts)
   check_bool(convert)
   on_error <- arg_match(on_error)
@@ -366,4 +368,15 @@ safely <- function(code) {
       list(result = NULL, error = cnd)
     }
   )
+}
+
+check_has_parallel_support <- function(provider, call = caller_env()) {
+  if (S7_inherits(provider, ProviderCodex)) {
+    cli::cli_abort(
+      "{.fn chat_codex} does not support parallel chat APIs in this release.",
+      class = "ellmer_codex_parallel_not_supported",
+      call = call
+    )
+  }
+  invisible()
 }
