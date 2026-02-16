@@ -9,6 +9,18 @@ chat_perform <- function(
   type = NULL
 ) {
   mode <- arg_match(mode)
+
+  provider_response <- chat_perform_provider(
+    provider = provider,
+    mode = mode,
+    turns = turns,
+    tools = tools,
+    type = type
+  )
+  if (!is.null(provider_response)) {
+    return(provider_response)
+  }
+
   stream <- mode %in% c("stream", "async-stream")
   tools <- tools %||% list()
 

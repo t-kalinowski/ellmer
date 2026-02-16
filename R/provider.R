@@ -98,6 +98,29 @@ method(chat_request, Provider) <- function(
   req
 }
 
+chat_perform_provider <- new_generic(
+  "chat_perform_provider",
+  "provider",
+  function(
+    provider,
+    mode = c("value", "stream", "async-stream", "async-value"),
+    turns,
+    tools = NULL,
+    type = NULL
+  ) {
+    S7_dispatch()
+  }
+)
+method(chat_perform_provider, Provider) <- function(
+  provider,
+  mode = c("value", "stream", "async-stream", "async-value"),
+  turns,
+  tools = NULL,
+  type = NULL
+) {
+  NULL
+}
+
 chat_body <- new_generic(
   "chat_body",
   "provider",
@@ -179,6 +202,28 @@ stream_merge_chunks <- new_generic(
 # Extract data from non-streaming results --------------------------------------
 
 value_turn <- new_generic("value_turn", "provider")
+
+chat_response_body <- new_generic(
+  "chat_response_body",
+  "provider",
+  function(provider, response) {
+    S7_dispatch()
+  }
+)
+method(chat_response_body, Provider) <- function(provider, response) {
+  resp_body_json(response)
+}
+
+chat_response_duration <- new_generic(
+  "chat_response_duration",
+  "provider",
+  function(provider, response) {
+    S7_dispatch()
+  }
+)
+method(chat_response_duration, Provider) <- function(provider, response) {
+  resp_timing(response)[["total"]] %||% NA_real_
+}
 
 # Extract token counts from API response
 # Returns a named list produced by token_usage()
