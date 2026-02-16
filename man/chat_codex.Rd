@@ -6,9 +6,10 @@
 \usage{
 chat_codex(
   system_prompt = NULL,
-  model = "gpt-5-codex",
+  model = "gpt-5.3-codex",
   params = NULL,
   codex_bin = "codex",
+  events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 )
 }
