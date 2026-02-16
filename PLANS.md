@@ -22,12 +22,12 @@ Success is demonstrated by a full round trip where:
 ## Progress
 
 - [x] (2026-02-16 00:00Z) Completed architecture investigation of ellmer provider internals and Codex app-server protocol internals.
-- [ ] Implement transport abstraction so providers are not hard-wired to `httr2` request/response only.
-- [ ] Implement `chat_codex()` and `ProviderCodex` runtime state management.
-- [ ] Implement Codex thread/turn execution path with text streaming bridge.
-- [ ] Implement dynamic tool bridge (`dynamicTools` + `item/tool/call` handling).
-- [ ] Implement structured output bridge (`turn/start.outputSchema`).
-- [ ] Add tests with a deterministic mock app-server process.
+- [x] (2026-02-16 00:25Z) Implemented provider transport seam (`chat_perform_provider`, `chat_response_body`, `chat_response_duration`) so non-HTTP runtimes can execute without `httr2` response objects.
+- [x] (2026-02-16 00:45Z) Implemented `chat_codex()` and `ProviderCodex` with persistent app-server child process runtime.
+- [x] (2026-02-16 01:10Z) Implemented Codex thread/turn execution path and stream-compatible delta emission for `chat()`/`stream()`.
+- [x] (2026-02-16 01:35Z) Implemented dynamic tool bridge (`thread/start.dynamicTools` + `item/tool/call` execution through ellmer `invoke_tool()`).
+- [x] (2026-02-16 01:50Z) Implemented structured output bridge using `turn/start.outputSchema` and `ContentJson` turn assembly.
+- [x] (2026-02-16 02:05Z) Added deterministic mock app-server tests covering constructor, text turns, dynamic tool calls, structured output, and tool-set locking.
 - [ ] Add docs and explicit unsupported-feature behavior.
 
 ## Surprises & Discoveries
@@ -49,6 +49,12 @@ Success is demonstrated by a full round trip where:
 
 - Observation: Ellmer currently has no process finalizers or unload cleanup for long-lived child processes.
   Evidence: no `finalize`, `reg.finalizer`, or `.onUnload` process cleanup in `R/chat.R` or `R/zzz.R`.
+
+- Observation: `processx::process$read_output()` can deliver concatenated JSON objects in a single chunk, which broke naive line parsing.
+  Evidence: failing `provider-codex` test showed `parse error: trailing garbage` with two adjacent JSON-RPC objects.
+
+- Observation: R named lists serialize to JSON objects, not arrays; this breaks `dynamicTools` payload shape unless names are dropped.
+  Evidence: mock app-server rejected first tool registration until `dynamicTools` list was wrapped with `unname(...)`.
 
 ## Decision Log
 
@@ -72,9 +78,13 @@ Success is demonstrated by a full round trip where:
   Rationale: Natural mapping exists for text/thinking; command/file/mcp item lifecycles do not map cleanly to existing ellmer stream output contracts.
   Date/Author: 2026-02-16 / Codex
 
+- Decision: Freeze Codex tool definitions at first `thread/start`; reject any later tool-set mutation for that chat instance.
+  Rationale: app-server dynamic tools are configured on thread start in the stable flow; mutating tools later without thread restart causes undefined behavior.
+  Date/Author: 2026-02-16 / Codex
+
 ## Outcomes & Retrospective
 
-This plan captures investigation findings and a concrete implementation sequence, but code changes are not started yet. The design intentionally prioritizes correctness of protocol handling and tool integration over broad API parity. The largest technical risk is the current `httr2`-centric transport assumption in ellmer core, so milestone 1 explicitly introduces a provider transport extension seam before Codex provider code is added.
+Core provider implementation is now in place and exercised by deterministic tests: transport seam, app-server runtime, text chat, dynamic tool calls, structured output, and tool-set locking are implemented. Remaining work is documentation and explicit unsupported-surface handling polish. The largest remaining risk is lifecycle cleanup for long-lived child processes (finalizers/unload behavior), which should be handled before release.
 
 ## Context and Orientation
 
