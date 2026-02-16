@@ -26,8 +26,10 @@ chat_codex <- function(
   model = "gpt-5.3-codex",
   params = NULL,
   codex_bin = "codex",
+  events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 ) {
+  events <- arg_match(events)
   echo <- check_echo(echo)
 
   provider <- ProviderCodex(
@@ -39,6 +41,7 @@ chat_codex <- function(
     extra_headers = character(),
     credentials = NULL,
     codex_bin = codex_bin,
+    events = events,
     runtime = codex_runtime_new()
   )
 
@@ -50,6 +53,7 @@ ProviderCodex <- new_class(
   parent = Provider,
   properties = list(
     codex_bin = prop_string(),
+    events = prop_string(),
     runtime = class_any
   )
 )
@@ -77,24 +81,22 @@ method(chat_perform_provider, ProviderCodex) <- function(
 
   input <- codex_turn_input(turns[[length(turns)]])
   output_schema <- if (is.null(type)) NULL else as_json(provider, type)
-  result <- codex_run_turn(
-    provider,
-    input,
-    tools = tools,
-    output_schema = output_schema
-  )
 
   if (mode == "value") {
-    result
+    codex_run_turn(
+      provider,
+      input,
+      tools = tools,
+      output_schema = output_schema
+    )
   } else {
-    iter <- coro::generator(function() {
-      for (delta in result$deltas) {
-        yield(list(type = "item/agentMessage/delta", delta = delta))
-      }
-      yield(list(type = "turn/completed", result = result))
-      coro::exhausted()
-    })
-    iter()
+    codex_stream_turn(
+      provider,
+      input,
+      tools = tools,
+      output_schema = output_schema,
+      emit_events = TRUE
+    )
   }
 }
 
@@ -152,6 +154,102 @@ codex_turn_input <- function(turn) {
   lapply(turn@contents[is_text], function(content) {
     list(type = "text", text = content@text)
   })
+}
+
+codex_stream_turn <- function(
+  provider,
+  input,
+  tools = NULL,
+  output_schema = NULL,
+  emit_events = FALSE
+) {
+  codex_ensure_thread(provider, tools = tools)
+  runtime <- provider@runtime
+  start <- Sys.time()
+
+  params <- list(
+    threadId = runtime$thread_id,
+    input = input
+  )
+  if (!is.null(output_schema)) {
+    params$outputSchema <- output_schema
+  }
+
+  request_id <- codex_send_request(provider, "turn/start", params)
+
+  iter <- coro::generator(function() {
+    response_received <- FALSE
+    deltas <- character()
+    final_text <- NULL
+
+    repeat {
+      msg <- codex_read_message(provider)
+
+      if (!is.null(msg$id) && as.numeric(msg$id) == as.numeric(request_id)) {
+        if (!is.null(msg$error)) {
+          cli::cli_abort(msg$error$message %||% "Codex request failed.")
+        }
+        response_received <- TRUE
+        next
+      }
+
+      if (!is.null(msg$id) && !is.null(msg$method)) {
+        codex_maybe_emit_event(provider, msg, emit_events = emit_events)
+        codex_handle_server_request(provider, msg, tools = tools)
+        next
+      }
+
+      if (is.null(msg$method)) {
+        next
+      }
+
+      codex_maybe_emit_event(provider, msg, emit_events = emit_events)
+
+      if (identical(msg$method, "item/agentMessage/delta")) {
+        delta <- msg$params$delta %||% ""
+        deltas <- c(deltas, delta)
+        yield(list(type = "item/agentMessage/delta", delta = delta))
+        next
+      }
+
+      if (identical(msg$method, "item/completed")) {
+        item <- msg$params$item
+        if (identical(item$type, "agentMessage")) {
+          final_text <- item$text
+        }
+        next
+      }
+
+      if (identical(msg$method, "turn/completed")) {
+        status <- msg$params$turn$status %||% "failed"
+        if (!identical(status, "completed")) {
+          err <- msg$params$turn$error$message %||% "Codex turn failed."
+          cli::cli_abort(err, class = "ellmer_codex_turn_failed")
+        }
+
+        if (!response_received) {
+          cli::cli_abort("Codex turn did not return a response.")
+        }
+
+        if (is.null(final_text)) {
+          final_text <- paste0(deltas, collapse = "")
+        }
+        yield(list(
+          type = "turn/completed",
+          result = list(
+            text = final_text,
+            deltas = deltas,
+            duration = as.numeric(difftime(Sys.time(), start, units = "secs"))
+          )
+        ))
+        break
+      }
+    }
+
+    coro::exhausted()
+  })
+
+  iter()
 }
 
 codex_run_turn <- function(
@@ -265,15 +363,18 @@ codex_ensure_initialized <- function(provider) {
     runtime$process <- processx::process$new(
       command = provider@codex_bin,
       args = c("app-server"),
+      env = c(CODEX_HOME = codex_home_dir()),
       stdin = "|",
       stdout = "|",
       stderr = "|",
       cleanup = FALSE
     )
+    runtime$codex_home <- codex_home_dir()
     runtime$initialized <- FALSE
     runtime$thread_id <- NULL
     runtime$output_buffer <- ""
     runtime$output_lines <- character()
+    runtime$stderr_lines <- character()
     runtime$tools_signature <- NULL
     runtime$next_request_id <- 1
   }
@@ -391,7 +492,12 @@ codex_read_message <- function(provider, timeout_ms = 10000) {
     if (identical(io[["error"]], "ready")) {
       errors <- proc$read_error_lines()
       if (length(errors) > 0) {
-        cli::cli_warn("codex app-server stderr: {errors[[1]]}")
+        runtime$stderr_lines <- c(runtime$stderr_lines, errors)
+        if (identical(provider@events, "raw")) {
+          for (line in errors) {
+            message(paste0("[codex stderr] ", line))
+          }
+        }
       }
     }
 
@@ -403,7 +509,12 @@ codex_read_message <- function(provider, timeout_ms = 10000) {
     }
 
     if (!proc$is_alive()) {
-      cli::cli_abort("Codex app-server process exited unexpectedly.")
+      details <- ""
+      tail_lines <- tail(runtime$stderr_lines, 3)
+      if (length(tail_lines) > 0) {
+        details <- paste0("\n", paste(tail_lines, collapse = "\n"))
+      }
+      cli::cli_abort(paste0("Codex app-server process exited unexpectedly.", details))
     }
   }
 
@@ -422,6 +533,8 @@ codex_runtime_new <- function() {
   runtime$thread_id <- NULL
   runtime$output_buffer <- ""
   runtime$output_lines <- character()
+  runtime$stderr_lines <- character()
+  runtime$codex_home <- codex_home_dir()
   runtime$tools_signature <- NULL
   runtime$next_request_id <- 1
   codex_register_runtime(runtime)
@@ -464,8 +577,85 @@ codex_runtime_stop <- function(runtime) {
   runtime$thread_id <- NULL
   runtime$output_buffer <- ""
   runtime$output_lines <- character()
+  runtime$stderr_lines <- character()
   runtime$tools_signature <- NULL
   invisible()
+}
+
+codex_home_dir <- function() {
+  path <- file.path(tools::R_user_dir("ellmer", which = "data"), "codex")
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  path
+}
+
+codex_maybe_emit_event <- function(provider, msg, emit_events = FALSE) {
+  if (!emit_events || identical(provider@events, "none")) {
+    return(invisible())
+  }
+
+  line <- codex_event_line(provider, msg)
+  if (!is.null(line)) {
+    message(line)
+  }
+  invisible()
+}
+
+codex_event_line <- function(provider, msg) {
+  method <- msg$method %||% NULL
+  if (is.null(method) || identical(method, "item/agentMessage/delta")) {
+    return(NULL)
+  }
+
+  if (identical(provider@events, "raw")) {
+    params <- msg$params %||% list()
+    payload <- unclass(jsonlite::toJSON(params, auto_unbox = TRUE, null = "null"))
+    return(paste0("[codex] ", method, " ", payload))
+  }
+
+  if (identical(method, "turn/started")) {
+    return("[codex] turn started")
+  }
+  if (identical(method, "turn/completed")) {
+    status <- msg$params$turn$status %||% "unknown"
+    return(paste0("[codex] turn ", status))
+  }
+  if (identical(method, "item/tool/call")) {
+    tool <- msg$params$tool %||% "unknown"
+    return(paste0("[codex] tool call: ", tool))
+  }
+  if (identical(method, "item/commandExecution/requestApproval")) {
+    return("[codex] command approval requested")
+  }
+  if (identical(method, "item/fileChange/requestApproval")) {
+    return("[codex] file change approval requested")
+  }
+  if (identical(method, "item/started")) {
+    item <- msg$params$item %||% list()
+    type <- item$type %||% "item"
+    if (identical(type, "commandExecution")) {
+      cmd <- paste(item$command %||% character(), collapse = " ")
+      return(paste0("[codex] command: ", cmd))
+    }
+    if (identical(type, "fileChange")) {
+      return("[codex] file changes proposed")
+    }
+    if (identical(type, "mcpToolCall")) {
+      tool <- item$tool %||% "tool"
+      return(paste0("[codex] app tool: ", tool))
+    }
+    return(paste0("[codex] ", type, " started"))
+  }
+  if (identical(method, "item/completed")) {
+    item <- msg$params$item %||% list()
+    type <- item$type %||% "item"
+    if (identical(type, "commandExecution")) {
+      status <- item$status %||% "completed"
+      return(paste0("[codex] command ", status))
+    }
+    return(paste0("[codex] ", type, " completed"))
+  }
+
+  NULL
 }
 
 codex_shutdown_all_runtimes <- function() {
