@@ -8,11 +8,11 @@ test_that("chat_codex() creates a chat with a codex provider", {
   expect_equal(provider@codex_bin, "codex")
   expect_false(isTRUE(provider@config$features$shell_tool))
   expect_identical(provider@config$web_search, "disabled")
-  expect_match(provider@config$developer_instructions, "Bare mode", fixed = TRUE)
+  expect_null(provider@config$developer_instructions)
 })
 
-test_that("chat_codex() full preset enables common tool surfaces", {
-  chat <- chat_codex(preset = "full", echo = "none")
+test_that("chat_codex() standard loadout enables common tool surfaces", {
+  chat <- chat_codex(loadout = "standard", echo = "none")
   provider <- chat$get_provider()
 
   expect_true(isTRUE(provider@config$features$shell_tool))
@@ -25,9 +25,9 @@ test_that("chat_codex() full preset enables common tool surfaces", {
   expect_null(provider@config$developer_instructions)
 })
 
-test_that("chat_codex() merges preset, config, and explicit overrides in order", {
+test_that("chat_codex() merges loadout, config, and explicit overrides in order", {
   chat <- chat_codex(
-    preset = "bare",
+    loadout = "minimal",
     config = list(features = list(shell_tool = TRUE)),
     enable_shell_tool = FALSE,
     echo = "none"

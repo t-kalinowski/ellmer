@@ -13,9 +13,9 @@ NULL
 #' (for example, run `codex login` first). Chat persistence for this provider is
 #' scoped to ellmer under `tools::R_user_dir("ellmer", "data")/codex`.
 #'
-#' The default `preset = "bare"` is intentionally minimal. It disables common
-#' tool surfaces and uses a "no tools" developer instruction. Use
-#' `preset = "full"` for an "enable everything practical" setup.
+#' The default `loadout = "minimal"` is intentionally minimal. It disables
+#' common tool surfaces through config only. Use `loadout = "standard"` for an
+#' "enable everything practical" setup.
 #'
 #' `config` is passed through to the app-server `thread/start` request. The
 #' convenience arguments (`enable_*` and `web_search_mode`) write into that
@@ -35,10 +35,9 @@ NULL
 #'
 #' Not every Codex tool is currently directly toggleable via config.
 #'
-#' @param preset One of:
-#'   * `"bare"` (default): disable common tool surfaces and use a no-tools
-#'     developer instruction.
-#'   * `"full"`: enable common tool surfaces for richer Codex capabilities.
+#' @param loadout One of:
+#'   * `"minimal"` (default): disable common tool surfaces via config.
+#'   * `"standard"`: enable common tool surfaces for richer Codex capabilities.
 #' @param system_prompt A system prompt to set the behavior of the assistant.
 #' @param model Model to use for Codex turns.
 #' @param params Common model parameters, usually created by [params()].
@@ -77,9 +76,9 @@ NULL
 #' }
 #'
 #' \dontrun{
-#' # "Full" mode with discoverable formals
+#' # "Standard" mode with discoverable formals
 #' chat <- chat_codex(
-#'   preset = "full",
+#'   loadout = "standard",
 #'   enable_shell_tool = TRUE,
 #'   web_search_mode = "live"
 #' )
@@ -113,7 +112,7 @@ NULL
 #' @export
 #' @returns A [Chat] object.
 chat_codex <- function(
-  preset = c("bare", "full"),
+  loadout = c("minimal", "standard"),
   system_prompt = NULL,
   model = "gpt-5.3-codex",
   params = NULL,
@@ -128,7 +127,7 @@ chat_codex <- function(
   events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 ) {
-  preset <- arg_match(preset)
+  loadout <- arg_match(loadout)
   if (!is.null(config) && !is.list(config)) {
     cli::cli_abort("{.arg config} must be a list or NULL.")
   }
@@ -147,7 +146,7 @@ chat_codex <- function(
   enable_apps <- codex_check_optional_flag(enable_apps, "enable_apps")
   enable_js_repl <- codex_check_optional_flag(enable_js_repl, "enable_js_repl")
   web_search_mode <- codex_check_optional_web_search_mode(web_search_mode)
-  config <- utils::modifyList(codex_preset_config(preset), config %||% list())
+  config <- utils::modifyList(codex_loadout_config(loadout), config %||% list())
   config <- codex_merge_discoverable_config(
     config,
     enable_shell_tool = enable_shell_tool,
@@ -177,8 +176,8 @@ chat_codex <- function(
   Chat$new(provider = provider, system_prompt = system_prompt, echo = echo)
 }
 
-codex_preset_config <- function(preset) {
-  if (identical(preset, "full")) {
+codex_loadout_config <- function(loadout) {
+  if (identical(loadout, "standard")) {
     return(list(
       web_search = "live",
       tools = list(view_image = TRUE),
@@ -201,10 +200,6 @@ codex_preset_config <- function(preset) {
       multi_agent = FALSE,
       apps = FALSE,
       js_repl = FALSE
-    ),
-    developer_instructions = paste(
-      "Bare mode: do not call tools.",
-      "Respond directly with plain text."
     )
   )
 }
