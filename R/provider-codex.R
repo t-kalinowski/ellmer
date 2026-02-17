@@ -366,9 +366,8 @@ codex_ensure_thread <- function(provider, tools = NULL) {
   }
 
   start_params <- list(model = provider@model)
-  config <- codex_prepare_thread_config(provider@config)
-  if (!is.null(config)) {
-    start_params$config <- config
+  if (!is.null(provider@config)) {
+    start_params$config <- provider@config
   }
   dynamic_tools <- codex_dynamic_tools(provider, tools)
   if (length(dynamic_tools) > 0) {
@@ -380,35 +379,6 @@ codex_ensure_thread <- function(provider, tools = NULL) {
   runtime$thread_id <- response$result$thread$id
   runtime$tools_signature <- codex_tools_signature(provider, tools = tools)
   invisible()
-}
-
-codex_prepare_thread_config <- function(config) {
-  if (is.null(config)) {
-    return(NULL)
-  }
-  if (!codex_shell_tool_disabled(config)) {
-    return(config)
-  }
-  codex_append_developer_instructions(config, paste(
-    "Do not call list_mcp_resources, list_mcp_resource_templates,",
-    "or read_mcp_resource in this thread."
-  ))
-}
-
-codex_shell_tool_disabled <- function(config) {
-  is.list(config) &&
-    is.list(config$features) &&
-    isFALSE(config$features$shell_tool)
-}
-
-codex_append_developer_instructions <- function(config, text) {
-  existing <- config$developer_instructions
-  if (!is.null(existing) && nzchar(existing)) {
-    config$developer_instructions <- paste(existing, text, sep = "\n\n")
-  } else {
-    config$developer_instructions <- text
-  }
-  config
 }
 
 codex_ensure_initialized <- function(provider) {

@@ -293,45 +293,6 @@ test_that("chat_codex() forwards config overrides to thread/start", {
 
   expect_false(isTRUE(parsed$features$shell_tool))
   expect_false(isTRUE(parsed$tools$view_image))
-  expect_match(
-    parsed$developer_instructions,
-    "Do not call list_mcp_resources",
-    fixed = TRUE
-  )
-})
-
-test_that("codex_prepare_thread_config() adds mcp suppression when shell tool is disabled", {
-  cfg <- list(features = list(shell_tool = FALSE))
-  prepared <- codex_prepare_thread_config(cfg)
-
-  expect_false(isTRUE(prepared$features$shell_tool))
-  expect_match(
-    prepared$developer_instructions,
-    "Do not call list_mcp_resources",
-    fixed = TRUE
-  )
-})
-
-test_that("codex_prepare_thread_config() appends to existing developer instructions", {
-  cfg <- list(
-    features = list(shell_tool = FALSE),
-    developer_instructions = "Stay concise."
-  )
-  prepared <- codex_prepare_thread_config(cfg)
-
-  expect_match(prepared$developer_instructions, "Stay concise.", fixed = TRUE)
-  expect_match(
-    prepared$developer_instructions,
-    "Do not call list_mcp_resources",
-    fixed = TRUE
-  )
-})
-
-test_that("codex_prepare_thread_config() is unchanged when shell tool is enabled", {
-  cfg <- list(features = list(shell_tool = TRUE))
-  prepared <- codex_prepare_thread_config(cfg)
-
-  expect_false("developer_instructions" %in% names(prepared))
 })
 
 test_that("chat_codex() emits app-server status events in stream mode", {
