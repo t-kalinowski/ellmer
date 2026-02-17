@@ -7,6 +7,30 @@ NULL
 #' `chat_codex()` creates an ellmer chat backed by the local `codex` binary.
 #' This provider uses the Codex app-server runtime instead of a direct HTTP API.
 #'
+#' @details
+#' `chat_codex()` starts `codex app-server` as a background process and talks to
+#' it over JSONL RPC. Authentication is handled by your local Codex CLI session
+#' (for example, run `codex login` first). Chat persistence for this provider is
+#' scoped to ellmer under `tools::R_user_dir("ellmer", "data")/codex`.
+#'
+#' `config` is passed through to the app-server `thread/start` request. The
+#' convenience arguments (`enable_*` and `web_search_mode`) write into that
+#' config object for discoverability. If both a convenience argument and
+#' `config` set the same key, the convenience argument wins.
+#'
+#' @section Common config settings:
+#' Common tool-related settings you can set either via convenience args or
+#' directly through `config`:
+#' * `features.shell_tool` (or `enable_shell_tool`)
+#' * `web_search` (or `web_search_mode`)
+#' * `features.collaboration_modes` (or `enable_request_user_input`)
+#' * `features.multi_agent` (or `enable_multi_agent`)
+#' * `features.apps` (or `enable_apps`)
+#' * `features.js_repl` (or `enable_js_repl`)
+#' * `tools.view_image` (via `config = list(tools = list(view_image = FALSE))`)
+#'
+#' Not every Codex tool is currently directly toggleable via config.
+#'
 #' @param system_prompt A system prompt to set the behavior of the assistant.
 #' @param model Model to use for Codex turns.
 #' @param params Common model parameters, usually created by [params()].
@@ -25,6 +49,10 @@ NULL
 #'   `config$features$apps`.
 #' @param enable_js_repl Optional single logical. If set, writes
 #'   `config$features$js_repl`.
+#' @param events Controls app-server event display:
+#'   * `status`: emit concise progress/tool status lines to stderr.
+#'   * `none`: suppress provider status lines.
+#'   * `raw`: emit raw event JSON to stderr.
 #' @param echo One of the following options:
 #'   * `none`: don't emit any output (default when running in a function).
 #'   * `output`: echo text and tool-calling output as it streams in (default
@@ -32,6 +60,46 @@ NULL
 #'   * `all`: echo all input and output.
 #'
 #'   Note this only affects the `chat()` method.
+#'
+#' @examples
+#' \dontrun{
+#' # Basic usage (requires local codex CLI auth)
+#' chat <- chat_codex()
+#' chat$chat("Summarize this package.")
+#' }
+#'
+#' \dontrun{
+#' # Disable shell + web search with discoverable formals
+#' chat <- chat_codex(
+#'   enable_shell_tool = FALSE,
+#'   web_search_mode = "disabled"
+#' )
+#' }
+#'
+#' \dontrun{
+#' # Pass arbitrary app-server config overrides
+#' chat <- chat_codex(
+#'   config = list(
+#'     features = list(
+#'       apps = FALSE,
+#'       collaboration_modes = FALSE
+#'     ),
+#'     tools = list(view_image = FALSE)
+#'   ),
+#'   events = "status"
+#' )
+#' }
+#'
+#' \dontrun{
+#' # Register an R tool that Codex can call
+#' chat <- chat_codex()
+#' chat$register_tool(tool(
+#'   function(city) paste("72 F in", city),
+#'   name = "getTemperature",
+#'   description = "Return a fake temperature for a city."
+#' ))
+#' chat$chat("Call getTemperature for Boston and report the value.")
+#' }
 #' @family chatbots
 #' @export
 #' @returns A [Chat] object.

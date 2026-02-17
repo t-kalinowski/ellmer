@@ -9,6 +9,13 @@ chat_codex(
   model = "gpt-5.3-codex",
   params = NULL,
   codex_bin = "codex",
+  config = NULL,
+  enable_shell_tool = NULL,
+  web_search_mode = NULL,
+  enable_request_user_input = NULL,
+  enable_multi_agent = NULL,
+  enable_apps = NULL,
+  enable_js_repl = NULL,
   events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 )
@@ -21,6 +28,34 @@ chat_codex(
 \item{params}{Common model parameters, usually created by \code{\link[=params]{params()}}.}
 
 \item{codex_bin}{Path to the local \code{codex} binary.}
+
+\item{config}{Optional list of Codex app-server config overrides to pass to
+\code{thread/start}.}
+
+\item{enable_shell_tool}{Optional single logical. If set, writes
+\code{config$features$shell_tool}.}
+
+\item{web_search_mode}{Optional single string: \code{"disabled"}, \code{"cached"}, or
+\code{"live"}. If set, writes \code{config$web_search}.}
+
+\item{enable_request_user_input}{Optional single logical. If set, writes
+\code{config$features$collaboration_modes}.}
+
+\item{enable_multi_agent}{Optional single logical. If set, writes
+\code{config$features$multi_agent}.}
+
+\item{enable_apps}{Optional single logical. If set, writes
+\code{config$features$apps}.}
+
+\item{enable_js_repl}{Optional single logical. If set, writes
+\code{config$features$js_repl}.}
+
+\item{events}{Controls app-server event display:
+\itemize{
+\item \code{status}: emit concise progress/tool status lines to stderr.
+\item \code{none}: suppress provider status lines.
+\item \code{raw}: emit raw event JSON to stderr.
+}}
 
 \item{echo}{One of the following options:
 \itemize{
@@ -38,6 +73,74 @@ A \link{Chat} object.
 \description{
 \code{chat_codex()} creates an ellmer chat backed by the local \code{codex} binary.
 This provider uses the Codex app-server runtime instead of a direct HTTP API.
+}
+\details{
+\code{chat_codex()} starts \verb{codex app-server} as a background process and talks to
+it over JSONL RPC. Authentication is handled by your local Codex CLI session
+(for example, run \verb{codex login} first). Chat persistence for this provider is
+scoped to ellmer under \code{tools::R_user_dir("ellmer", "data")/codex}.
+
+\code{config} is passed through to the app-server \code{thread/start} request. The
+convenience arguments (\verb{enable_*} and \code{web_search_mode}) write into that
+config object for discoverability. If both a convenience argument and
+\code{config} set the same key, the convenience argument wins.
+}
+\section{Common config settings}{
+
+Common tool-related settings you can set either via convenience args or
+directly through \code{config}:
+\itemize{
+\item \code{features.shell_tool} (or \code{enable_shell_tool})
+\item \code{web_search} (or \code{web_search_mode})
+\item \code{features.collaboration_modes} (or \code{enable_request_user_input})
+\item \code{features.multi_agent} (or \code{enable_multi_agent})
+\item \code{features.apps} (or \code{enable_apps})
+\item \code{features.js_repl} (or \code{enable_js_repl})
+\item \code{tools.view_image} (via \code{config = list(tools = list(view_image = FALSE))})
+}
+
+Not every Codex tool is currently directly toggleable via config.
+}
+
+\examples{
+\dontrun{
+# Basic usage (requires local codex CLI auth)
+chat <- chat_codex()
+chat$chat("Summarize this package.")
+}
+
+\dontrun{
+# Disable shell + web search with discoverable formals
+chat <- chat_codex(
+  enable_shell_tool = FALSE,
+  web_search_mode = "disabled"
+)
+}
+
+\dontrun{
+# Pass arbitrary app-server config overrides
+chat <- chat_codex(
+  config = list(
+    features = list(
+      apps = FALSE,
+      collaboration_modes = FALSE
+    ),
+    tools = list(view_image = FALSE)
+  ),
+  events = "status"
+)
+}
+
+\dontrun{
+# Register an R tool that Codex can call
+chat <- chat_codex()
+chat$register_tool(tool(
+  function(city) paste("72 F in", city),
+  name = "getTemperature",
+  description = "Return a fake temperature for a city."
+))
+chat$chat("Call getTemperature for Boston and report the value.")
+}
 }
 \seealso{
 Other chatbots: 
