@@ -11,6 +11,8 @@ NULL
 #' @param model Model to use for Codex turns.
 #' @param params Common model parameters, usually created by [params()].
 #' @param codex_bin Path to the local `codex` binary.
+#' @param config Optional list of Codex app-server config overrides to pass to
+#'   `thread/start`.
 #' @param echo One of the following options:
 #'   * `none`: don't emit any output (default when running in a function).
 #'   * `output`: echo text and tool-calling output as it streams in (default
@@ -26,9 +28,13 @@ chat_codex <- function(
   model = "gpt-5.3-codex",
   params = NULL,
   codex_bin = "codex",
+  config = NULL,
   events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 ) {
+  if (!is.null(config) && !is.list(config)) {
+    cli::cli_abort("{.arg config} must be a list or NULL.")
+  }
   events <- arg_match(events)
   echo <- check_echo(echo)
 
@@ -41,6 +47,7 @@ chat_codex <- function(
     extra_headers = character(),
     credentials = NULL,
     codex_bin = codex_bin,
+    config = config,
     events = events,
     runtime = codex_runtime_new()
   )
@@ -53,6 +60,7 @@ ProviderCodex <- new_class(
   parent = Provider,
   properties = list(
     codex_bin = prop_string(),
+    config = class_any,
     events = prop_string(),
     runtime = class_any
   )
@@ -358,6 +366,9 @@ codex_ensure_thread <- function(provider, tools = NULL) {
   }
 
   start_params <- list(model = provider@model)
+  if (!is.null(provider@config)) {
+    start_params$config <- provider@config
+  }
   dynamic_tools <- codex_dynamic_tools(provider, tools)
   if (length(dynamic_tools) > 0) {
     start_params$dynamicTools <- dynamic_tools

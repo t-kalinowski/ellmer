@@ -6,6 +6,14 @@ test_that("chat_codex() creates a chat with a codex provider", {
   expect_equal(provider@name, "Codex")
   expect_equal(provider@model, "gpt-5.3-codex")
   expect_equal(provider@codex_bin, "codex")
+  expect_null(provider@config)
+})
+
+test_that("chat_codex() validates config argument type", {
+  expect_error(
+    chat_codex(config = "not-a-list"),
+    "config.*must be a list or NULL"
+  )
 })
 
 test_that("chat_codex() errors clearly when codex binary is missing", {
@@ -223,12 +231,68 @@ mock_codex_bin_echo_path <- function() {
   path
 }
 
+mock_codex_bin_echo_config <- function() {
+  path <- tempfile(fileext = ".py")
+  code <- c(
+    "#!/usr/bin/env python3",
+    "import json, sys",
+    "",
+    "thread_config = None",
+    "",
+    "def send(msg):",
+    "    sys.stdout.write(json.dumps(msg) + '\\n')",
+    "    sys.stdout.flush()",
+    "",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line:",
+    "        continue",
+    "    msg = json.loads(line)",
+    "    method = msg.get('method')",
+    "    req_id = msg.get('id')",
+    "",
+    "    if method == 'initialize':",
+    "        send({'id': req_id, 'result': {'userAgent': 'mock-codex/0.1'}})",
+    "    elif method == 'initialized':",
+    "        continue",
+    "    elif method == 'thread/start':",
+    "        thread_config = (msg.get('params') or {}).get('config')",
+    "        send({'id': req_id, 'result': {'thread': {'id': 'thr_cfg', 'preview': '', 'modelProvider': 'openai', 'createdAt': 0}}})",
+    "    elif method == 'turn/start':",
+    "        turn = {'id': 'turn_cfg', 'status': 'inProgress', 'items': [], 'error': None}",
+    "        send({'id': req_id, 'result': {'turn': turn}})",
+    "        text = json.dumps(thread_config or {}, sort_keys=True)",
+    "        send({'method': 'item/completed', 'params': {'threadId': 'thr_cfg', 'turnId': 'turn_cfg', 'item': {'type': 'agentMessage', 'id': 'item_1', 'text': text}}})",
+    "        send({'method': 'turn/completed', 'params': {'threadId': 'thr_cfg', 'turn': {'id': 'turn_cfg', 'status': 'completed', 'items': [], 'error': None}}})",
+    "    else:",
+    "        if req_id is not None:",
+    "            send({'id': req_id, 'result': {}})"
+  )
+  writeLines(code, path)
+  Sys.chmod(path, "755")
+  path
+}
+
 test_that("chat_codex() passes PATH through to app-server process", {
   codex_bin <- mock_codex_bin_echo_path()
   chat <- chat_codex(codex_bin = codex_bin, echo = "none")
   out <- as.character(chat$chat("Report PATH"))
 
   expect_equal(out, Sys.getenv("PATH", unset = ""))
+})
+
+test_that("chat_codex() forwards config overrides to thread/start", {
+  codex_bin <- mock_codex_bin_echo_config()
+  cfg <- list(
+    features = list(shell_tool = FALSE),
+    tools = list(view_image = FALSE)
+  )
+  chat <- chat_codex(codex_bin = codex_bin, config = cfg, echo = "none")
+  out <- as.character(chat$chat("Report config"))
+  parsed <- jsonlite::parse_json(out, simplifyVector = TRUE)
+
+  expect_false(isTRUE(parsed$features$shell_tool))
+  expect_false(isTRUE(parsed$tools$view_image))
 })
 
 test_that("chat_codex() emits app-server status events in stream mode", {
