@@ -6,7 +6,35 @@ test_that("chat_codex() creates a chat with a codex provider", {
   expect_equal(provider@name, "Codex")
   expect_equal(provider@model, "gpt-5.3-codex")
   expect_equal(provider@codex_bin, "codex")
-  expect_null(provider@config)
+  expect_false(isTRUE(provider@config$features$shell_tool))
+  expect_identical(provider@config$web_search, "disabled")
+  expect_match(provider@config$developer_instructions, "Bare mode", fixed = TRUE)
+})
+
+test_that("chat_codex() full preset enables common tool surfaces", {
+  chat <- chat_codex(preset = "full", echo = "none")
+  provider <- chat$get_provider()
+
+  expect_true(isTRUE(provider@config$features$shell_tool))
+  expect_true(isTRUE(provider@config$features$collaboration_modes))
+  expect_true(isTRUE(provider@config$features$multi_agent))
+  expect_true(isTRUE(provider@config$features$apps))
+  expect_true(isTRUE(provider@config$features$js_repl))
+  expect_identical(provider@config$web_search, "live")
+  expect_true(isTRUE(provider@config$tools$view_image))
+  expect_null(provider@config$developer_instructions)
+})
+
+test_that("chat_codex() merges preset, config, and explicit overrides in order", {
+  chat <- chat_codex(
+    preset = "bare",
+    config = list(features = list(shell_tool = TRUE)),
+    enable_shell_tool = FALSE,
+    echo = "none"
+  )
+  provider <- chat$get_provider()
+
+  expect_false(isTRUE(provider@config$features$shell_tool))
 })
 
 test_that("chat_codex() validates config argument type", {

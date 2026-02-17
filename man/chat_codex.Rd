@@ -5,6 +5,7 @@
 \title{Chat with Codex via the local Codex CLI}
 \usage{
 chat_codex(
+  preset = c("bare", "full"),
   system_prompt = NULL,
   model = "gpt-5.3-codex",
   params = NULL,
@@ -21,6 +22,13 @@ chat_codex(
 )
 }
 \arguments{
+\item{preset}{One of:
+\itemize{
+\item \code{"bare"} (default): disable common tool surfaces and use a no-tools
+developer instruction.
+\item \code{"full"}: enable common tool surfaces for richer Codex capabilities.
+}}
+
 \item{system_prompt}{A system prompt to set the behavior of the assistant.}
 
 \item{model}{Model to use for Codex turns.}
@@ -80,6 +88,10 @@ it over JSONL RPC. Authentication is handled by your local Codex CLI session
 (for example, run \verb{codex login} first). Chat persistence for this provider is
 scoped to ellmer under \code{tools::R_user_dir("ellmer", "data")/codex}.
 
+The default \code{preset = "bare"} is intentionally minimal. It disables common
+tool surfaces and uses a "no tools" developer instruction. Use
+\code{preset = "full"} for an "enable everything practical" setup.
+
 \code{config} is passed through to the app-server \code{thread/start} request. The
 convenience arguments (\verb{enable_*} and \code{web_search_mode}) write into that
 config object for discoverability. If both a convenience argument and
@@ -110,10 +122,11 @@ chat$chat("Summarize this package.")
 }
 
 \dontrun{
-# Disable shell + web search with discoverable formals
+# "Full" mode with discoverable formals
 chat <- chat_codex(
-  enable_shell_tool = FALSE,
-  web_search_mode = "disabled"
+  preset = "full",
+  enable_shell_tool = TRUE,
+  web_search_mode = "live"
 )
 }
 
