@@ -13,6 +13,18 @@ NULL
 #' @param codex_bin Path to the local `codex` binary.
 #' @param config Optional list of Codex app-server config overrides to pass to
 #'   `thread/start`.
+#' @param enable_shell_tool Optional single logical. If set, writes
+#'   `config$features$shell_tool`.
+#' @param web_search_mode Optional single string: `"disabled"`, `"cached"`, or
+#'   `"live"`. If set, writes `config$web_search`.
+#' @param enable_request_user_input Optional single logical. If set, writes
+#'   `config$features$collaboration_modes`.
+#' @param enable_multi_agent Optional single logical. If set, writes
+#'   `config$features$multi_agent`.
+#' @param enable_apps Optional single logical. If set, writes
+#'   `config$features$apps`.
+#' @param enable_js_repl Optional single logical. If set, writes
+#'   `config$features$js_repl`.
 #' @param echo One of the following options:
 #'   * `none`: don't emit any output (default when running in a function).
 #'   * `output`: echo text and tool-calling output as it streams in (default
@@ -29,12 +41,42 @@ chat_codex <- function(
   params = NULL,
   codex_bin = "codex",
   config = NULL,
+  enable_shell_tool = NULL,
+  web_search_mode = NULL,
+  enable_request_user_input = NULL,
+  enable_multi_agent = NULL,
+  enable_apps = NULL,
+  enable_js_repl = NULL,
   events = c("status", "none", "raw"),
   echo = c("none", "output", "all")
 ) {
   if (!is.null(config) && !is.list(config)) {
     cli::cli_abort("{.arg config} must be a list or NULL.")
   }
+  enable_shell_tool <- codex_check_optional_flag(
+    enable_shell_tool,
+    "enable_shell_tool"
+  )
+  enable_request_user_input <- codex_check_optional_flag(
+    enable_request_user_input,
+    "enable_request_user_input"
+  )
+  enable_multi_agent <- codex_check_optional_flag(
+    enable_multi_agent,
+    "enable_multi_agent"
+  )
+  enable_apps <- codex_check_optional_flag(enable_apps, "enable_apps")
+  enable_js_repl <- codex_check_optional_flag(enable_js_repl, "enable_js_repl")
+  web_search_mode <- codex_check_optional_web_search_mode(web_search_mode)
+  config <- codex_merge_discoverable_config(
+    config,
+    enable_shell_tool = enable_shell_tool,
+    web_search_mode = web_search_mode,
+    enable_request_user_input = enable_request_user_input,
+    enable_multi_agent = enable_multi_agent,
+    enable_apps = enable_apps,
+    enable_js_repl = enable_js_repl
+  )
   events <- arg_match(events)
   echo <- check_echo(echo)
 
@@ -53,6 +95,61 @@ chat_codex <- function(
   )
 
   Chat$new(provider = provider, system_prompt = system_prompt, echo = echo)
+}
+
+codex_check_optional_flag <- function(x, arg) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (!is.logical(x) || length(x) != 1 || is.na(x)) {
+    cli::cli_abort("{.arg {arg}} must be TRUE, FALSE, or NULL.")
+  }
+  x
+}
+
+codex_check_optional_web_search_mode <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  arg_match0(x, c("disabled", "cached", "live"), arg_nm = "web_search_mode")
+}
+
+codex_merge_discoverable_config <- function(
+  config,
+  enable_shell_tool = NULL,
+  web_search_mode = NULL,
+  enable_request_user_input = NULL,
+  enable_multi_agent = NULL,
+  enable_apps = NULL,
+  enable_js_repl = NULL
+) {
+  updates <- list()
+
+  if (!is.null(enable_shell_tool)) {
+    updates$features$shell_tool <- enable_shell_tool
+  }
+  if (!is.null(web_search_mode)) {
+    updates$web_search <- web_search_mode
+  }
+  if (!is.null(enable_request_user_input)) {
+    updates$features$collaboration_modes <- enable_request_user_input
+  }
+  if (!is.null(enable_multi_agent)) {
+    updates$features$multi_agent <- enable_multi_agent
+  }
+  if (!is.null(enable_apps)) {
+    updates$features$apps <- enable_apps
+  }
+  if (!is.null(enable_js_repl)) {
+    updates$features$js_repl <- enable_js_repl
+  }
+
+  if (length(updates) == 0) {
+    return(config)
+  }
+
+  base <- config %||% list()
+  utils::modifyList(base, updates)
 }
 
 ProviderCodex <- new_class(
